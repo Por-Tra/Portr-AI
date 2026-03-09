@@ -84,8 +84,7 @@ Common Crawl
 
 Étapes :
 
-1 nettoyer le texte 2 retirer HTML 3 normaliser 4 transformer en corpus
-brut
+1 nettoyer le texte 2 retirer HTML 3 normaliser 4 transformer en corpus brut
 
 ------------------------------------------------------------------------
 
