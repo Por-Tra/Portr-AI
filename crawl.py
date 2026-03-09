@@ -41,19 +41,33 @@ def build_logger():
 
 
 def parse_args(config: dict) -> dict:
+    default_urls = config.get("start_urls", [])
     parser = argparse.ArgumentParser(
-        description="Crawler web récursif — collecte de texte vers SQLite"
+        description="Crawler web récursif — collecte de texte vers SQLite",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Exemples :\n"
+               "  python crawl.py\n"
+               "  python crawl.py --url https://example.com\n"
+               "  python crawl.py --url https://site1.com https://site2.com\n",
     )
     parser.add_argument(
         "--url",
-        default=config["start_url"],
-        help=f"URL de départ (défaut : {config['start_url']})",
+        nargs="+",
+        default=None,
+        metavar="URL",
+        help="URL(s) de départ, séparées par des espaces (écrase start_urls de config.py)",
     )
     parser.add_argument(
         "--max-pages",
         type=int,
         default=config["max_pages"],
-        help=f"Limite de pages (défaut : {config['max_pages']})",
+        help=f"Limite globale de pages (défaut : {config['max_pages']})",
+    )
+    parser.add_argument(
+        "--max-pages-per-site",
+        type=int,
+        default=config.get("max_pages_per_site", config["max_pages"]),
+        help="Limite de pages par site avant de passer au suivant",
     )
     parser.add_argument(
         "--max-depth",
@@ -75,10 +89,10 @@ def parse_args(config: dict) -> dict:
 
     args = parser.parse_args()
 
-    # Fusionne les overrides CLI dans la config
     config = dict(config)
-    config["start_url"] = args.url
+    config["start_urls"] = args.url if args.url else default_urls
     config["max_pages"] = args.max_pages
+    config["max_pages_per_site"] = args.max_pages_per_site
     config["max_depth"] = args.max_depth
     config["num_workers"] = args.workers
     config["db_file"] = args.db
@@ -89,20 +103,27 @@ async def main():
     config = parse_args(CRAWLER_CONFIG)
     log = build_logger()
 
+    start_urls = config["start_urls"]
+
     log("=" * 70, "INFO")
     log("  CRAWLER WEB — démarrage", "INFO")
     log("=" * 70, "INFO")
-    log(f"  URL de départ   : {config['start_url']}", "INFO")
-    log(f"  Pages max       : {config['max_pages']}", "INFO")
-    log(f"  Profondeur max  : {config['max_depth']}", "INFO")
-    log(f"  Workers         : {config['num_workers']}", "INFO")
-    log(f"  Base de données : {config['db_file']}", "INFO")
+    log(f"  Sites ({len(start_urls)}) :", "INFO")
+    for u in start_urls:
+        log(f"    {u}", "INFO")
+    log(f"  Pages max (global)   : {config['max_pages']}", "INFO")
+    log(f"  Pages max / site     : {config.get('max_pages_per_site', '—')}", "INFO")
+    log(f"  Profondeur max       : {config['max_depth']}", "INFO")
+    log(f"  Workers              : {config['num_workers']}", "INFO")
+    log(f"  Proxies              : {len(config.get('proxies', []))}", "INFO")
+    log(f"  User-agents          : {len(config.get('user_agents', []))}", "INFO")
+    log(f"  Base de données      : {config['db_file']}", "INFO")
     log("=" * 70, "INFO")
 
     with Database(db_file=config["db_file"]) as db:
         crawler = WebCrawler(database=db, config=config, logger=log)
         try:
-            await crawler.run(config["start_url"])
+            await crawler.run_all(start_urls)
         except KeyboardInterrupt:
             log("\n[INFO] Interruption clavier — arrêt en cours…", "WARN")
             crawler.stop()

@@ -106,6 +106,7 @@ Word Tokenization
 
 Byte Pair Encoding (BPE)
 https://sebastianraschka.com/blog/2025/bpe-from-scratch.html
+https://youtu.be/VrZTHO1E76w?si=8NGodlWKTbPC16Uu
 
 Unigram LM
 

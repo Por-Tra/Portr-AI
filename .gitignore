@@ -1,5 +1,6 @@
 # Ignore the datasets directory with database files
-datasets/
+crawler.db
+dataset.jsonl
 
 
 #=========================================================

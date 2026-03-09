@@ -107,6 +107,68 @@ def _extract_main_content(html: str, url: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Rotateurs User-Agent / Proxy
+# ---------------------------------------------------------------------------
+
+class _UARotator:
+    """Retourne un User-Agent aléatoire à chaque appel."""
+
+    _DEFAULTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    ]
+
+    def __init__(self, user_agents: list):
+        import random as _r
+        self._agents = list(user_agents) if user_agents else self._DEFAULTS
+        self._r = _r
+
+    def get(self) -> str:
+        return self._r.choice(self._agents)
+
+
+class _ProxyRotator:
+    """Round-robin sur une liste de proxies avec cooldown sur 403/429."""
+
+    def __init__(self, proxies: list, cooldown: float = 60.0):
+        # None = connexion directe (sans proxy)
+        self._proxies: list = list(proxies) if proxies else [None]
+        self._cooldown = cooldown
+        self._blocked_until: dict = {}
+        self._idx: int = 0
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _init_lock(self):
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
+    async def get(self) -> Optional[str]:
+        """Retourne le prochain proxy disponible (round-robin)."""
+        self._init_lock()
+        async with self._lock:
+            n = len(self._proxies)
+            now = time.time()
+            for _ in range(n):
+                p = self._proxies[self._idx % n]
+                self._idx = (self._idx + 1) % n
+                if now >= self._blocked_until.get(p or "__direct__", 0.0):
+                    return p
+            # Tous bloqués — retourne quand même le suivant dans la liste
+            p = self._proxies[self._idx % n]
+            self._idx = (self._idx + 1) % n
+            return p
+
+    async def penalize(self, proxy: Optional[str]):
+        """Marque ce proxy comme bloqué pendant `cooldown` secondes."""
+        self._init_lock()
+        async with self._lock:
+            self._blocked_until[proxy or "__direct__"] = time.time() + self._cooldown
+
+
+# ---------------------------------------------------------------------------
 # WebCrawler
 # ---------------------------------------------------------------------------
 
@@ -141,7 +203,18 @@ class WebCrawler:
 
         self._jsonl_file = None  # handle ouvert pendant le crawl
 
-        # Locks initialisés dans run()
+        # Rotation user-agent / proxy
+        self._ua_rot = _UARotator(config.get("user_agents", []))
+        self._proxy_rot = _ProxyRotator(
+            config.get("proxies", []),
+            cooldown=config.get("proxy_cooldown", 60.0),
+        )
+
+        # Suivi par site (mis à jour dans _crawl_site)
+        self._site_pages_start: int = 0
+        self._site_max_pages: int = config.get("max_pages", 9_999_999)
+
+        # Locks initialisés dans run_all()
         self.visited_lock: Optional[asyncio.Lock] = None
         self.stats_lock: Optional[asyncio.Lock] = None
 
@@ -162,19 +235,28 @@ class WebCrawler:
 
     async def check_access(self, session: aiohttp.ClientSession, url: str) -> bool:
         """HEAD rapide pour vérifier que l'URL est accessible."""
+        proxy = await self._proxy_rot.get()
+        ua = self._ua_rot.get()
         try:
             await self._count_request()
-            async with session.head(url, timeout=aiohttp.ClientTimeout(total=5),
-                                    allow_redirects=True) as resp:
+            async with session.head(
+                url,
+                timeout=aiohttp.ClientTimeout(total=5),
+                allow_redirects=True,
+                proxy=proxy,
+                headers={"User-Agent": ua},
+            ) as resp:
                 if resp.status == 403:
                     self.log(f"[WARN] 403 Forbidden : {url}", "WARN")
                     async with self.stats_lock:
                         self.stats["blocked"] += 1
+                    await self._proxy_rot.penalize(proxy)
                     return False
                 if resp.status == 429:
                     self.log(f"[WARN] 429 Too Many Requests : {url}", "WARN")
                     async with self.stats_lock:
                         self.stats["blocked"] += 1
+                    await self._proxy_rot.penalize(proxy)
                     return False
                 if resp.status >= 400:
                     self.log(f"[WARN] HTTP {resp.status} : {url}", "WARN")
@@ -194,18 +276,27 @@ class WebCrawler:
 
     async def fetch(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
         """GET et retourne le HTML brut, ou None si échec/non-HTML."""
+        proxy = await self._proxy_rot.get()
+        ua = self._ua_rot.get()
         try:
             await self._count_request()
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=10),
+                proxy=proxy,
+                headers={"User-Agent": ua},
+            ) as resp:
                 if resp.status == 403:
                     self.log(f"[BLOCKED] 403 : {url}", "ERROR")
                     async with self.stats_lock:
                         self.stats["blocked"] += 1
+                    await self._proxy_rot.penalize(proxy)
                     return None
                 if resp.status == 429:
                     self.log(f"[BLOCKED] 429 : {url}", "ERROR")
                     async with self.stats_lock:
                         self.stats["blocked"] += 1
+                    await self._proxy_rot.penalize(proxy)
                     return None
                 content_type = resp.headers.get("content-type", "")
                 if resp.status == 200 and "text/html" in content_type:
@@ -430,7 +521,7 @@ class WebCrawler:
 
                 async with self.stats_lock:
                     pages_done = self.stats["visited"]
-                if pages_done >= self.config["max_pages"]:
+                if pages_done >= self.config["max_pages"] or pages_done >= self._site_max_pages:
                     queue.task_done()
                     break
 
@@ -440,7 +531,8 @@ class WebCrawler:
 
             except asyncio.TimeoutError:
                 async with self.stats_lock:
-                    done = self.stats["visited"] >= self.config["max_pages"]
+                    done = (self.stats["visited"] >= self.config["max_pages"]
+                            or self.stats["visited"] >= self._site_max_pages)
                 if done or queue.empty():
                     break
             except Exception as e:
@@ -475,30 +567,60 @@ class WebCrawler:
     # Point d'entrée
     # ------------------------------------------------------------------
 
-    async def run(self, start_url: str) -> dict:
-        """Lance le crawl complet depuis start_url."""
+    async def _crawl_site(self, start_url: str, session: aiohttp.ClientSession):
+        """Crawl BFS d'un seul site. Reset visited, applique la limite par site."""
+        async with self.visited_lock:
+            self.visited.clear()
+
+        max_per_site = self.config.get("max_pages_per_site", self.config["max_pages"])
+        async with self.stats_lock:
+            self._site_pages_start = self.stats["visited"]
+            self._site_max_pages = self._site_pages_start + max_per_site
+
+        self.log(f"[SITE] Début : {start_url}", "INFO")
+        await self.crawl_bfs(start_url, session)
+
+        async with self.stats_lock:
+            pages_this_site = self.stats["visited"] - self._site_pages_start
+        self.log(f"[SITE] Fin : {start_url} — {pages_this_site} pages", "INFO")
+
+    async def run_all(self, start_urls: list) -> dict:
+        """Crawl une liste de sites séquentiellement.
+
+        Pour chaque site :
+        - le set visited est remis à zéro (on repart de la racine)
+        - la déduplication par hash reste active globalement
+        - on s'arrête dès que max_pages (global) ou max_pages_per_site est atteint
+        """
         self.is_running = True
         self.visited_lock = asyncio.Lock()
         self.stats_lock = asyncio.Lock()
         start_time = time.time()
 
-        # Ouvrir le fichier JSONL
         jsonl_path = self.config.get("jsonl_output", "data/datasets/dataset.jsonl")
         os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
         self._jsonl_file = open(jsonl_path, "a", encoding="utf-8")
 
-        headers = {
-            "User-Agent": self.config["user_agent"],
-            "Accept-Encoding": "gzip, br",
-        }
         connector = aiohttp.TCPConnector(
             limit=self.config["concurrency"],
             ttl_dns_cache=300,
         )
 
         try:
-            async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-                await self.crawl_bfs(start_url, session)
+            async with aiohttp.ClientSession(
+                connector=connector,
+                headers={"Accept-Encoding": "gzip, br"},
+            ) as session:
+                for i, url in enumerate(start_urls):
+                    if not self.is_running:
+                        break
+                    async with self.stats_lock:
+                        global_done = self.stats["visited"] >= self.config["max_pages"]
+                    if global_done:
+                        self.log("[INFO] Limite globale atteinte — arrêt.", "INFO")
+                        break
+                    self.log(f"\n[SITES] {i + 1}/{len(start_urls)} → {url}", "INFO")
+                    await self._crawl_site(url, session)
         finally:
             if self._jsonl_file:
                 self._jsonl_file.close()
@@ -511,6 +633,7 @@ class WebCrawler:
         self.log(f"\n{sep}", "INFO")
         self.log("  STATISTIQUES FINALES", "INFO")
         self.log(sep, "INFO")
+        self.log(f"  Sites traités        : {len(start_urls)}", "INFO")
         self.log(f"  Pages visitées       : {self.stats['visited']}", "INFO")
         self.log(f"  Pages sauvées        : {self.stats['saved']}", "INFO")
         self.log(f"  Requêtes HTTP        : {self.stats['requests']}", "INFO")
@@ -526,6 +649,10 @@ class WebCrawler:
         self.log(sep, "INFO")
 
         return self.stats
+
+    async def run(self, start_url: str) -> dict:
+        """Raccourci pour crawler un seul site."""
+        return await self.run_all([start_url])
 
     def stop(self):
         """Arrête le crawler proprement."""
