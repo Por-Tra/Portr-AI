@@ -105,6 +105,7 @@ Algorithmes possibles :
 Word Tokenization
 
 Byte Pair Encoding (BPE)
+https://sebastianraschka.com/blog/2025/bpe-from-scratch.html
 
 Unigram LM
 
