@@ -29,7 +29,7 @@ import json
 import os
 from typing import Dict, Iterable, List, Optional, Tuple
 import re
-
+from tqdm import tqdm # pour afficher une barre de progression pendant le training
 
 DEFAULT_MODEL_PATH = "tokenizer/token/bpe_model.json"
 SPACE_TOKEN = "▁"
@@ -87,7 +87,7 @@ class Tokenizer:
         """Découpe un corpus texte en liste de mots représentés en symboles."""
         corpus_symbols: List[List[str]] = []
 
-        for text in texts:
+        for text in tqdm(texts, desc="Preparing corpus"):
             for token in self.split_text(text):
                 token = self.normalize_token(token)
                 corpus_symbols.append(self.prepare_word(token))
@@ -148,9 +148,12 @@ class Tokenizer:
             verbose: Affiche la progression.
         """
         corpus_symbols = self.prepare_corpus(texts)
-        self.vocab = set(sym for word in corpus_symbols for sym in word)
+        self.vocab = set(self.special_tokens)
+        self.vocab.update(sym for word in corpus_symbols for sym in word)
         self.merges = []
         self.merge_ranks = {}
+
+        pbar = tqdm(total=target_vocab_size, desc="Training BPE")
 
         while len(self.vocab) < target_vocab_size:
             pair_counts = self.count_pairs(corpus_symbols)
@@ -168,6 +171,8 @@ class Tokenizer:
                 break
 
             corpus_symbols = self.merge_pair(corpus_symbols, best_pair)
+            pbar.update(1) # mise à jour de la barre de progression
+
             merged_token = best_pair[0] + best_pair[1]
             self.vocab.add(merged_token)
             self.merges.append(best_pair)
@@ -244,39 +249,31 @@ class Tokenizer:
             "end_of_word": self.end_of_word,
             "vocab": sorted(self.vocab),
             "merges": [[a, b] for a, b in self.merges],
+            "token_to_id": self.token_to_id,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-        data = {
-            "end_of_word": self.end_of_word,
-            "vocab": sorted(self.vocab),
-            "merges": [[a, b] for a, b in self.merges],
-            "token_to_id": self.token_to_id
-        }
-
     @classmethod
     def load(cls, path: str = DEFAULT_MODEL_PATH) -> "Tokenizer":
         """Charge un modèle BPE sauvegardé."""
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-        
-        try:
+        tok = cls(end_of_word=data.get("end_of_word", "</w>"))
+        tok.vocab = set(data.get("vocab", []))
+        tok.vocab.update(tok.special_tokens)
+        tok.merges = [tuple(x) for x in data.get("merges", [])]
+        tok.merge_ranks = {pair: i for i, pair in enumerate(tok.merges)}
 
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+        loaded_token_to_id = data.get("token_to_id")
+        if loaded_token_to_id:
+            tok.token_to_id = {str(t): int(i) for t, i in loaded_token_to_id.items()}
+        else:
+            tok.token_to_id = {t: i for i, t in enumerate(sorted(tok.vocab))}
+        tok.id_to_token = {i: t for t, i in tok.token_to_id.items()}
 
-            tok = cls(end_of_word=data.get("end_of_word", "</w>"))
-            tok.vocab = set(data.get("vocab", []))
-            tok.merges = [tuple(x) for x in data.get("merges", [])]
-            tok.merge_ranks = {pair: i for i, pair in enumerate(tok.merges)}
-
-            tok.token_to_id = data.get("token_to_id", {})
-            tok.id_to_token = {i:t for t,i in tok.token_to_id.items()}
-
-            return tok
-    
-        except FileNotFoundError:
-            print(f"[Tokenizer] Fichier de modèle introuvable : {path}")
+        return tok
 
 
     # ------------------------------------------------------------------

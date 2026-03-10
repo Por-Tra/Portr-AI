@@ -21,19 +21,15 @@ def _configure_stdout_for_unicode() -> None:
 
 
 def TokenizeData():
+    _configure_stdout_for_unicode()
 
     # Vérifier si le fichier de modèle existe déjà pour éviter de réentraîner à chaque exécution
     try:
         tok = Tokenizer.load()
         print("Tokenizer model loaded from file.")
-        return
     except FileNotFoundError:
         print("No existing tokenizer model found. Training a new one...")
         tok = Tokenizer()
-
-
-    
-
 
     texts = []
 
@@ -47,7 +43,7 @@ def TokenizeData():
 
     tok.train(
         texts,
-        target_vocab_size=5000,
+        target_vocab_size=1000,
         min_pair_freq=2,
         verbose=True
     )

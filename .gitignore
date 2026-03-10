@@ -2,6 +2,8 @@
 crawler.db
 dataset.jsonl
 bpe_model.json
+test
+test.py
 
 
 #=========================================================
