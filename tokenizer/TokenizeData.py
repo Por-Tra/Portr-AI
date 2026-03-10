@@ -43,7 +43,7 @@ def TokenizeData():
 
     tok.train(
         texts,
-        target_vocab_size=1000,
+        target_vocab_size=100000, # plus le vocabulaire est grand, plus le modèle peut comprendre de nuances, mais cela rend aussi le modèle plus lourd et plus lent à entraîner. 100k est un bon compromis pour un modèle de taille moyenne.
         min_pair_freq=2,
         verbose=True
     )
