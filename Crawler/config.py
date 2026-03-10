@@ -9,22 +9,24 @@ CRAWLER_CONFIG = {
     # --- Sites à crawler (parcourus dans l'ordre) ---
     # Dès qu'un site est épuisé (ou que max_pages_per_site est atteint), on passe au suivant.
     "start_urls": [
-        "https://fr.wikipedia.org/wiki/Accueil",
-        "https://www.lemonde.fr",
-        "https://www.futura-sciences.com",
-        "https://diply.com/",
-        "https://www.bfmtv.com/",
-        "https://www.cnews.fr/",
-        "https://www.kaggle.com/"
+        # "https://forums.jeuxonline.info/sujet/736796/tuto-comment-cuisiner-son-caca-irl",
+        # "https://www.charleville-sedan-tourisme.fr/preparez-votre-sejour/gastronomie/recettes/la-cacasse-a-cul-nu/",
+        # "https://lamentable.fr/2020/03/22/gaspillage-alimentaire-manger-ses-selles-permettrait-de-digerer-deux-fois-plus-de-nourriture/",
+        # "https://www.lamontagne.fr/",
+        "https://dictionnaire.lerobert.com/fr/",
+        "https://www.dictionnaire-academie.fr/",
+        "https://usito.usherbrooke.ca/index/mots",
+        "https://www.iro.umontreal.ca/~pift1146/exemples/fonctions/phrases.htm"
+
     ],
 
     # --- Limites ---
-    "max_pages": 10_000,          # Limite GLOBALE (tous sites confondus)
-    "max_pages_per_site": 2_000,  # Limite PAR SITE avant de passer au suivant
+    "max_pages": 50000,          # Limite GLOBALE (tous sites confondus)
+    "max_pages_per_site": 10000,  # Limite PAR SITE avant de passer au suivant
     "max_depth": 10,              # Profondeur de récursion max (0 = page de départ seule)
 
     # --- Parallélisme ---
-    "num_workers": 8,             # Nombre de workers asynchrones par site
+    "num_workers": 20,             # Nombre de workers asynchrones par site
     "concurrency": 50,            # Nb max de connexions TCP simultanées
 
     # --- Délai de politesse ---

@@ -1,6 +1,7 @@
 # Ignore the datasets directory with database files
 crawler.db
 dataset.jsonl
+bpe_model.json
 
 
 #=========================================================
