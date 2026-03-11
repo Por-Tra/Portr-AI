@@ -9,20 +9,25 @@ CRAWLER_CONFIG = {
     # --- Sites à crawler (parcourus dans l'ordre) ---
     # Dès qu'un site est épuisé (ou que max_pages_per_site est atteint), on passe au suivant.
     "start_urls": [
-        # "https://forums.jeuxonline.info/sujet/736796/tuto-comment-cuisiner-son-caca-irl",
-        # "https://www.charleville-sedan-tourisme.fr/preparez-votre-sejour/gastronomie/recettes/la-cacasse-a-cul-nu/",
-        # "https://lamentable.fr/2020/03/22/gaspillage-alimentaire-manger-ses-selles-permettrait-de-digerer-deux-fois-plus-de-nourriture/",
-        # "https://www.lamontagne.fr/",
+        "https://www.lexilogos.com/dictionnaire_langues.htm",
+        "https://www.bnf.fr/fr/dictionnaires-de-langue-en-ligne",
+        "https://forums.jeuxonline.info/sujet/736796/tuto-comment-cuisiner-son-caca-irl",
+        "https://www.charleville-sedan-tourisme.fr/preparez-votre-sejour/gastronomie/recettes/la-cacasse-a-cul-nu/",
+        "https://lamentable.fr/2020/03/22/gaspillage-alimentaire-manger-ses-selles-permettrait-de-digerer-deux-fois-plus-de-nourriture/",
+        "https://www.lamontagne.fr/",
         "https://dictionnaire.lerobert.com/fr/",
         "https://www.dictionnaire-academie.fr/",
         "https://usito.usherbrooke.ca/index/mots",
-        "https://www.iro.umontreal.ca/~pift1146/exemples/fonctions/phrases.htm"
+        "https://www.iro.umontreal.ca/~pift1146/exemples/fonctions/phrases.htm",
+        "https://marentreefacile.com/collections/dictionnaires?srsltid=AfmBOoqb2MR8G0I__9rt8zEsGGVHmerZAVAyFb8JjUBoRs-sUQHirmE4",
+        "https://actu.epfl.ch/news/tous-les-mots-de-toutes-les-langues-dans-un-seul-d/"
+
 
     ],
 
     # --- Limites ---
-    "max_pages": 50000,          # Limite GLOBALE (tous sites confondus)
-    "max_pages_per_site": 10000,  # Limite PAR SITE avant de passer au suivant
+    "max_pages": 100000,          # Limite GLOBALE (tous sites confondus)
+    "max_pages_per_site": 1000,  # Limite PAR SITE avant de passer au suivant
     "max_depth": 10,              # Profondeur de récursion max (0 = page de départ seule)
 
     # --- Parallélisme ---
