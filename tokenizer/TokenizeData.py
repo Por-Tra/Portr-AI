@@ -10,6 +10,8 @@ from tokenizer import Tokenizer
 import json
 import sys
 
+VOCAB_SIZE = 500000
+
 
 def _configure_stdout_for_unicode() -> None:
     """Force UTF-8 output on compatible terminals to avoid cp1252 crashes."""
@@ -43,8 +45,8 @@ def TokenizeData():
 
     tok.train(
         texts,
-        target_vocab_size=100000, # plus le vocabulaire est grand, plus le modèle peut comprendre de nuances, mais cela rend aussi le modèle plus lourd et plus lent à entraîner. 100k est un bon compromis pour un modèle de taille moyenne.
-        min_pair_freq=2,
+        target_vocab_size=VOCAB_SIZE, # plus le vocabulaire est grand, plus le modèle peut comprendre de nuances, mais cela rend aussi le modèle plus lourd et plus lent à entraîner. 100k est un bon compromis pour un modèle de taille moyenne.
+        min_pair_freq=2, # plus la fréquence minimale est élevée, moins de paires seront fusionnées, ce qui peut conduire à un vocabulaire plus grand et à une meilleure capacité de généralisation, mais aussi à un modèle plus lourd. 2 est un bon compromis pour éviter les paires très rares qui pourraient ne pas être utiles.
         verbose=True
     )
 

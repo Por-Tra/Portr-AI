@@ -8,7 +8,7 @@ Optimisations clés vs version naïve :
 |                            | voisines du token fusionné sont mises à jour |
 | merge_pair() O(N) × V      | word_freq dict : on ne stocke chaque forme   |
 |                            | de mot qu'une seule fois (× sa fréquence)    |
-| most_frequent_pair() O(P)  | Heap max avec lazy-deletion → O(log P)       |
+| most_frequent_pair() O(P)  | Heap max avec lazy-deletion -> O(log P)      |
 ─────────────────────────────────────────────────────────────────────────────
 
 Complexité :
@@ -38,7 +38,7 @@ SPACE_TOKEN = "▁"
 
 
 class Tokenizer:
-    """Tokeniseur BPE caractère → sous-mots (implémentation optimisée)."""
+    """Tokeniseur BPE caractère -> sous-mots (implémentation optimisée)."""
 
     def __init__(self, end_of_word: str = "</w>"):
         self.end_of_word = end_of_word
@@ -75,10 +75,10 @@ class Tokenizer:
 
     def _build_word_freq(self, texts: Iterable[str]) -> Dict[Tuple[str, ...], int]:
         """
-        Construit un dictionnaire { séquence_symboles → fréquence }.
+        Construit un dictionnaire { séquence_symboles -> fréquence }.
 
         Au lieu de stocker chaque occurrence du mot "the" 10 000 fois,
-        on stocke  ('t','h','e','</w>') → 10000.
+        on stocke  ('t','h','e','</w>') -> 10000.
         Cela réduit drastiquement le coût des itérations suivantes.
         """
         word_freq: Dict[Tuple[str, ...], int] = defaultdict(int)
@@ -95,17 +95,23 @@ class Tokenizer:
 
     @staticmethod
     def _pairs_in_word(word: Tuple[str, ...]) -> List[Tuple[str, str]]:
+        """_summary_
+        Trouve toutes les paires de symboles adjacents dans un mot donné.
+
+        Args:
+            word (Tuple[str, ...]): Un mot représenté comme une séquence de symboles (caractères + </w>).
+
+        Returns:
+            List[Tuple[str, str]]: Liste de toutes les paires de symboles adjacents dans le mot.
+        """
         return [(word[i], word[i + 1]) for i in range(len(word) - 1)]
 
-    def _count_all_pairs(
-        self,
-        word_freq: Dict[Tuple[str, ...], int],
-    ) -> Tuple[Dict[Tuple[str, str], int], Dict[Tuple[str, str], set]]:
+    def _count_all_pairs(self, word_freq: Dict[Tuple[str, ...], int],) -> Tuple[Dict[Tuple[str, str], int], Dict[Tuple[str, str], set]]:
         """
         Comptage initial complet.
         Retourne :
-          pair_counts  : paire → fréquence agrégée
-          pair_to_words: paire → ensemble des mots qui la contiennent
+          pair_counts  : paire -> fréquence agrégée
+          pair_to_words: paire -> ensemble des mots qui la contiennent
         """
         pair_counts: Dict[Tuple[str, str], int] = defaultdict(int)
         pair_to_words: Dict[Tuple[str, str], set] = defaultdict(set)
@@ -126,9 +132,9 @@ class Tokenizer:
         Apprend les fusions BPE.
 
         Optimisations actives :
-          • word_freq dict   → évite de re-parcourir les doublons de mots
-          • mise à jour incrémentale des pair_counts après chaque merge
-          • heap max (lazy-deletion) → meilleure paire en O(log P)
+           word_freq dict   -> évite de re-parcourir les doublons de mots
+           mise à jour incrémentale des pair_counts après chaque merge
+           heap max (lazy-deletion) -> meilleure paire en O(log P)
         """
         # ── 1. Construction du dictionnaire de fréquences ────────────────
         word_freq = self._build_word_freq(texts)
@@ -187,7 +193,7 @@ class Tokenizer:
             #     1. Soustraire les fréquences des anciennes paires
             #     2. Construire le nouveau mot fusionné
             #     3. Ajouter les fréquences des nouvelles paires
-            #   → seule une fraction du corpus est re-visitée
+            #   -> seule une fraction du corpus est re-visitée
             affected_words = list(pair_to_words.pop(best_pair, set()))
 
             for old_word in affected_words:
@@ -250,7 +256,14 @@ class Tokenizer:
     # ------------------------------------------------------------------
 
     def _apply_merges(self, symbols: List[str]) -> List[str]:
-        """Applique les merges appris dans l'ordre d'apprentissage."""
+        """_summary_
+        Applique les merges appris à une séquence de symboles (caractères + </w>).
+        Args:
+            symbols (List[str]): Liste de symboles représentant un mot (ex: ['t', 'h', 'e', '</w>']).
+
+        Returns:
+            List[str]: Liste de tokens après application des merges (ex: ['the</w>'] si 't'+'h'+'e' a été fusionné).
+        """
         while True:
             pairs = [(symbols[i], symbols[i + 1]) for i in range(len(symbols) - 1)]
             ranked = [
@@ -265,6 +278,16 @@ class Tokenizer:
         return symbols
 
     def tokenize_word(self, word: str, strip_eow: bool = True) -> List[str]:
+        """_summary_
+        Tokenise un mot donné en appliquant les merges appris.
+
+        Args:
+            word (str): Le mot à tokeniser.
+            strip_eow (bool, optional): Indique si le marqueur de fin de mot doit être retiré des tokens finaux. Par défaut à True.
+
+        Returns:
+            List[str]: Liste de tokens résultant de la tokenisation du mot.
+        """
         symbols = self.prepare_word(word)
         tokens = self._apply_merges(symbols)
         if strip_eow:
@@ -272,6 +295,16 @@ class Tokenizer:
         return tokens
 
     def tokenize_text(self, text: str, strip_eow: bool = True) -> List[str]:
+        """_summary_
+        Tokenise un texte complet en appliquant les merges appris à chaque mot.
+
+        Args:
+            text (str): Le texte à tokeniser.
+            strip_eow (bool, optional): Indique si le marqueur de fin de mot doit être retiré des tokens finaux. Par défaut à True.
+
+        Returns:
+            List[str]: Liste de tokens résultant de la tokenisation du texte.
+        """
         output: List[str] = []
         for token in self.split_text(text):
             token = self.normalize_token(token)
@@ -283,30 +316,44 @@ class Tokenizer:
     # ------------------------------------------------------------------
 
     def save(self, path: str = DEFAULT_MODEL_PATH) -> None:
+        """_summary_
+        Sauvegarde le modèle BPE (vocabulaire + merges) dans un fichier JSON.
+
+        Args:
+            path (str, optional): Chemin du fichier de sauvegarde. Par défaut à "tokenizer/token/bpe_model.json".
+        """
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        data = {
-            "end_of_word": self.end_of_word,
-            "vocab": sorted(self.vocab),
-            "merges": [[a, b] for a, b in self.merges],
-            "token_to_id": self.token_to_id,
-        }
+        data = {"end_of_word": self.end_of_word, "vocab": sorted(self.vocab), "merges": [[a, b] for a, b in self.merges],"token_to_id": self.token_to_id}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     @classmethod
     def load(cls, path: str = DEFAULT_MODEL_PATH) -> "Tokenizer":
+        """_summary_
+        Charge un modèle BPE à partir d'un fichier JSON.
+        
+        Args:
+            path (str, optional): Chemin du fichier de chargement. Par défaut à "tokenizer/token/bpe_model.json".
+
+        Returns:
+            Tokenizer: Instance de Tokenizer initialisée avec le vocabulaire et les merges chargés.
+        """
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        
+        # mise en place des données dans la classe (voir __init__)
         tok = cls(end_of_word=data.get("end_of_word", "</w>"))
         tok.vocab = set(data.get("vocab", []))
         tok.vocab.update(tok.special_tokens)
         tok.merges = [tuple(x) for x in data.get("merges", [])]
         tok.merge_ranks = {pair: i for i, pair in enumerate(tok.merges)}
         loaded = data.get("token_to_id")
+
         if loaded:
             tok.token_to_id = {str(t): int(i) for t, i in loaded.items()}
         else:
             tok.token_to_id = {t: i for i, t in enumerate(sorted(tok.vocab))}
+
         tok.id_to_token = {i: t for t, i in tok.token_to_id.items()}
         return tok
 
