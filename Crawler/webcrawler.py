@@ -1,6 +1,7 @@
-
 # -*- coding: utf-8 -*-
 """
+webcrawler.py
+
 Module principal du crawler web.
 Crawl récursif en largeur (BFS) avec workers asynchrones parallèles.
 
@@ -10,6 +11,10 @@ Pipeline par page :
          → filtre langue (langdetect)
          → filtre qualité (ratio lettres, longueur)
          → sauvegarde SQLite + export JSONL
+
+Modes :
+    stay_on_domain=True  → crawl intra-site classique (défaut)
+    stay_on_domain=False → crawl global "tout internet" (BFS unique sur tous les start_urls)
 """
 
 import asyncio
@@ -17,12 +22,14 @@ import aiohttp
 import hashlib
 import json
 import os
+import random
 import re
 import time
 from typing import Optional, Callable
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 try:
     import trafilatura
@@ -46,7 +53,6 @@ def _sha256(text: str) -> str:
 
 
 def _letters_ratio(text: str) -> float:
-    """Proportion de caractères alphabétiques dans le texte."""
     if not text:
         return 0.0
     letters = sum(c.isalpha() for c in text)
@@ -57,24 +63,64 @@ def _detect_lang(text: str) -> Optional[str]:
     if not _HAS_LANGDETECT or not text:
         return None
     try:
-        return _langdetect(text[:3000])   # 3 000 chars suffisent pour la détection
+        return _langdetect(text[:3000])
     except LangDetectException:
         return None
 
 
-def _is_url_blacklisted(url: str, blacklist: list[str]) -> bool:
+def _is_url_blacklisted(url: str, blacklist: list) -> bool:
     url_lower = url.lower()
     return any(token in url_lower for token in blacklist)
 
 
-def _extract_main_content(html: str, url: str) -> tuple[str, str]:
-    """
-    Extrait le contenu principal (hors menus/sidebar/boilerplate).
-    Utilise trafilatura si dispo, sinon fallback BeautifulSoup.
+# Signatures HTML connues de pages CAPTCHA / challenge
+_CAPTCHA_SIGNATURES = [
+    # Cloudflare
+    "cf-browser-verification",
+    "cf_clearance",
+    "checking your browser",
+    "please wait... | cloudflare",
+    "attention required! | cloudflare",
+    "enable javascript and cookies to continue",
+    # hCaptcha
+    "hcaptcha.com/1/api.js",
+    # reCAPTCHA
+    "google.com/recaptcha",
+    "recaptcha/api.js",
+    # Génériques
+    "captcha-delivery.com",
+    "datadome",
+    "px.distil.networks",
+    "perimeterx",
+    "__cf_chl",
+]
 
-    Returns:
-        (title, content)
-    """
+def _is_captcha_page(html: str) -> bool:
+    """Retourne True si la page semble être un mur CAPTCHA / challenge JS."""
+    lower = html.lower()
+    return any(sig in lower for sig in _CAPTCHA_SIGNATURES)
+
+
+# Signatures HTML indiquant un captcha / challenge anti-bot
+_CAPTCHA_SIGNALS = [
+    # Cloudflare
+    "cf-browser-verification", "cf_clearance", "checking your browser",
+    "enable javascript and cookies", "ray id",
+    # Google reCAPTCHA / hCaptcha
+    "recaptcha", "hcaptcha.com", "www.google.com/recaptcha",
+    # Génériques
+    "captcha", "robot check", "are you a robot", "i am not a robot",
+    "verify you are human", "please verify", "access denied",
+    "ddos-guard", "datadome",
+]
+
+def _is_captcha_page(html: str) -> bool:
+    """Renvoie True si la page est un mur captcha / challenge bot."""
+    lower = html.lower()
+    return any(signal in lower for signal in _CAPTCHA_SIGNALS)
+
+
+def _extract_main_content(html: str, url: str) -> tuple:
     title = ""
     content = ""
 
@@ -88,7 +134,6 @@ def _extract_main_content(html: str, url: str) -> tuple[str, str]:
             favor_precision=True,
         )
         content = extracted or ""
-        # Titre via BeautifulSoup (léger)
         soup = BeautifulSoup(html, "lxml")
         t = soup.find("title")
         title = t.get_text(strip=True) if t else ""
@@ -107,12 +152,41 @@ def _extract_main_content(html: str, url: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Headers navigateur réalistes
+# ---------------------------------------------------------------------------
+
+_BROWSER_HEADERS = [
+    {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    },
+    {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr,fr-FR;q=0.8,en-GB;q=0.5,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-User": "?1",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Rotateurs User-Agent / Proxy
 # ---------------------------------------------------------------------------
 
 class _UARotator:
-    """Retourne un User-Agent aléatoire à chaque appel."""
-
     _DEFAULTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -122,19 +196,19 @@ class _UARotator:
     ]
 
     def __init__(self, user_agents: list):
-        import random as _r
         self._agents = list(user_agents) if user_agents else self._DEFAULTS
-        self._r = _r
 
     def get(self) -> str:
-        return self._r.choice(self._agents)
+        return random.choice(self._agents)
+
+    def get_headers(self) -> dict:
+        base = random.choice(_BROWSER_HEADERS).copy()
+        base["User-Agent"] = self.get()
+        return base
 
 
 class _ProxyRotator:
-    """Round-robin sur une liste de proxies avec cooldown sur 403/429."""
-
     def __init__(self, proxies: list, cooldown: float = 60.0):
-        # None = connexion directe (sans proxy)
         self._proxies: list = list(proxies) if proxies else [None]
         self._cooldown = cooldown
         self._blocked_until: dict = {}
@@ -146,7 +220,6 @@ class _ProxyRotator:
             self._lock = asyncio.Lock()
 
     async def get(self) -> Optional[str]:
-        """Retourne le prochain proxy disponible (round-robin)."""
         self._init_lock()
         async with self._lock:
             n = len(self._proxies)
@@ -156,16 +229,52 @@ class _ProxyRotator:
                 self._idx = (self._idx + 1) % n
                 if now >= self._blocked_until.get(p or "__direct__", 0.0):
                     return p
-            # Tous bloqués — retourne quand même le suivant dans la liste
             p = self._proxies[self._idx % n]
             self._idx = (self._idx + 1) % n
             return p
 
     async def penalize(self, proxy: Optional[str]):
-        """Marque ce proxy comme bloqué pendant `cooldown` secondes."""
         self._init_lock()
         async with self._lock:
             self._blocked_until[proxy or "__direct__"] = time.time() + self._cooldown
+
+
+# ---------------------------------------------------------------------------
+# Throttling par domaine
+# ---------------------------------------------------------------------------
+
+class _DomainThrottler:
+    """Garantit un délai minimum entre deux requêtes vers le même domaine."""
+
+    def __init__(self, delay: float, jitter_ratio: float = 0.5):
+        self._delay = delay
+        self._jitter_ratio = jitter_ratio
+        self._last_req: dict = {}
+        self._locks: dict = {}
+        self._meta_lock: Optional[asyncio.Lock] = None
+
+    def _init(self):
+        if self._meta_lock is None:
+            self._meta_lock = asyncio.Lock()
+
+    async def _get_lock(self, domain: str) -> asyncio.Lock:
+        self._init()
+        async with self._meta_lock:
+            if domain not in self._locks:
+                self._locks[domain] = asyncio.Lock()
+            return self._locks[domain]
+
+    async def wait(self, url: str):
+        domain = urlparse(url).netloc
+        lock = await self._get_lock(domain)
+        async with lock:
+            now = time.time()
+            last = self._last_req.get(domain, 0.0)
+            jitter = random.uniform(0, self._delay * self._jitter_ratio)
+            wait = self._delay + jitter - (now - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_req[domain] = time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -175,16 +284,13 @@ class _ProxyRotator:
 class WebCrawler:
     """Crawler web BFS asynchrone avec pipeline de qualité pour dataset LLM."""
 
+    # Intervalle (en pages sauvées) pour afficher un bilan dans les logs
+    _PROGRESS_EVERY = 50
+
     def __init__(self, database, config: dict, logger: Optional[Callable] = None):
-        """
-        Args:
-            database: Instance de Database.
-            config:   Dictionnaire de configuration (voir Crawler/config.py).
-            logger:   Callable(message, level) pour le logging.
-        """
         self.database = database
         self.config = config
-        self.logger = logger or (lambda msg, level="INFO": print(msg))
+        self.logger = logger or (lambda msg, level="INFO": None)
 
         self.visited: set = set()
         self.is_running: bool = False
@@ -201,113 +307,147 @@ class WebCrawler:
             "skipped_quality": 0,
         }
 
-        self._jsonl_file = None  # handle ouvert pendant le crawl
+        self._jsonl_file = None
 
-        # Rotation user-agent / proxy
+        # Barres de progression tqdm (initialisées dans run_all)
+        self._pbar_visited: Optional[tqdm] = None
+        self._pbar_saved: Optional[tqdm] = None
+
         self._ua_rot = _UARotator(config.get("user_agents", []))
         self._proxy_rot = _ProxyRotator(
             config.get("proxies", []),
             cooldown=config.get("proxy_cooldown", 60.0),
         )
+        self._throttler = _DomainThrottler(
+            delay=config.get("politeness_delay", 0.3),
+            jitter_ratio=config.get("jitter_ratio", 0.5),
+        )
 
-        # Suivi par site (mis à jour dans _crawl_site)
         self._site_pages_start: int = 0
         self._site_max_pages: int = config.get("max_pages", 9_999_999)
 
-        # Locks initialisés dans run_all()
         self.visited_lock: Optional[asyncio.Lock] = None
         self.stats_lock: Optional[asyncio.Lock] = None
 
     # ------------------------------------------------------------------
-    # Logging
+    # Logging (via tqdm.write pour ne pas écraser les barres)
     # ------------------------------------------------------------------
 
     def log(self, message: str, level: str = "INFO"):
-        self.logger(message, level)
+        if level in ("WARN", "ERROR", "SUCCESS"):
+            tqdm.write(self._colorize(message, level))
+        elif level == "INFO" and message.startswith(("[SAVED]", "[SITE]", "[INFO]",
+                                                      "=", "  ", "[SITES]")):
+            tqdm.write(self._colorize(message, level))
+
+    @staticmethod
+    def _colorize(message: str, level: str) -> str:
+        COLORS = {"INFO": "\033[0m", "WARN": "\033[93m",
+                  "ERROR": "\033[91m", "SUCCESS": "\033[92m"}
+        return f"{COLORS.get(level, '')} {message}\033[0m"
+
+    def _update_bars(self, visited_delta: int = 0, saved_delta: int = 0):
+        if self._pbar_visited and visited_delta:
+            self._pbar_visited.update(visited_delta)
+        if self._pbar_saved and saved_delta:
+            self._pbar_saved.update(saved_delta)
+
+    def _log_progress(self):
+        """Met à jour le postfix des barres toutes les N pages sauvées."""
+        saved = self.stats["saved"]
+        if saved > 0 and saved % self._PROGRESS_EVERY == 0:
+            if self._pbar_visited:
+                self._pbar_visited.set_postfix({
+                    "bloqués": self.stats["blocked"],
+                    "erreurs": self.stats["errors"],
+                    "dup": self.stats["skipped_dup"],
+                }, refresh=True)
 
     # ------------------------------------------------------------------
-    # Réseau
+    # Réseau avec backoff exponentiel
     # ------------------------------------------------------------------
 
     async def _count_request(self):
         async with self.stats_lock:
             self.stats["requests"] += 1
 
-    async def check_access(self, session: aiohttp.ClientSession, url: str) -> bool:
-        """HEAD rapide pour vérifier que l'URL est accessible."""
-        proxy = await self._proxy_rot.get()
-        ua = self._ua_rot.get()
-        try:
-            await self._count_request()
-            async with session.head(
-                url,
-                timeout=aiohttp.ClientTimeout(total=5),
-                allow_redirects=True,
-                proxy=proxy,
-                headers={"User-Agent": ua},
-            ) as resp:
-                if resp.status == 403:
-                    self.log(f"[WARN] 403 Forbidden : {url}", "WARN")
-                    async with self.stats_lock:
-                        self.stats["blocked"] += 1
-                    await self._proxy_rot.penalize(proxy)
-                    return False
-                if resp.status == 429:
-                    self.log(f"[WARN] 429 Too Many Requests : {url}", "WARN")
-                    async with self.stats_lock:
-                        self.stats["blocked"] += 1
-                    await self._proxy_rot.penalize(proxy)
-                    return False
-                if resp.status >= 400:
-                    self.log(f"[WARN] HTTP {resp.status} : {url}", "WARN")
-                    async with self.stats_lock:
-                        self.stats["errors"] += 1
-                    return False
-                return True
-        except asyncio.TimeoutError:
-            self.log(f"[WARN] Timeout (HEAD) : {url}", "WARN")
-            async with self.stats_lock:
-                self.stats["errors"] += 1
-            return False
-        except Exception:
-            async with self.stats_lock:
-                self.stats["errors"] += 1
-            return False
+    async def fetch(self, session: aiohttp.ClientSession, url: str,
+                    max_retries: int = 3) -> Optional[str]:
+        """GET avec retry + backoff exponentiel sur 429/503."""
+        for attempt in range(max_retries):
+            await self._throttler.wait(url)
+            proxy = await self._proxy_rot.get()
+            headers = self._ua_rot.get_headers()
 
-    async def fetch(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
-        """GET et retourne le HTML brut, ou None si échec/non-HTML."""
-        proxy = await self._proxy_rot.get()
-        ua = self._ua_rot.get()
-        try:
-            await self._count_request()
-            async with session.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=10),
-                proxy=proxy,
-                headers={"User-Agent": ua},
-            ) as resp:
-                if resp.status == 403:
-                    self.log(f"[BLOCKED] 403 : {url}", "ERROR")
-                    async with self.stats_lock:
-                        self.stats["blocked"] += 1
-                    await self._proxy_rot.penalize(proxy)
+            try:
+                await self._count_request()
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    proxy=proxy,
+                    headers=headers,
+                    allow_redirects=True,
+                ) as resp:
+
+                    # --- Bloqué ---
+                    if resp.status in (403, 429):
+                        retry_after = float(resp.headers.get("Retry-After", 0))
+                        backoff = retry_after or (2 ** attempt * 2 + random.uniform(0, 2))
+                        async with self.stats_lock:
+                            self.stats["blocked"] += 1
+                        await self._proxy_rot.penalize(proxy)
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(min(backoff, 60))
+                            continue
+                        self.log(f"[BLOCKED] {resp.status} : {url}", "WARN")
+                        return None
+
+                    # --- Erreur serveur, retryable ---
+                    if resp.status in (500, 502, 503, 504):
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt + random.uniform(0, 1))
+                            continue
+                        async with self.stats_lock:
+                            self.stats["errors"] += 1
+                        return None
+
+                    # --- Autre erreur HTTP ---
+                    if resp.status >= 400:
+                        async with self.stats_lock:
+                            self.stats["errors"] += 1
+                        return None
+
+                    # --- Succès ---
+                    content_type = resp.headers.get("content-type", "")
+                    if resp.status == 200 and "text/html" in content_type:
+                        html = await resp.text()
+                        if _is_captcha_page(html):
+                            self.log(f"[CAPTCHA] Mur détecté, page ignorée : {url}", "WARN")
+                            async with self.stats_lock:
+                                self.stats["blocked"] += 1
+                            await self._proxy_rot.penalize(proxy)
+                            return None
+                        return html
                     return None
-                if resp.status == 429:
-                    self.log(f"[BLOCKED] 429 : {url}", "ERROR")
-                    async with self.stats_lock:
-                        self.stats["blocked"] += 1
-                    await self._proxy_rot.penalize(proxy)
-                    return None
-                content_type = resp.headers.get("content-type", "")
-                if resp.status == 200 and "text/html" in content_type:
-                    return await resp.text()
-                return None
-        except asyncio.TimeoutError:
-            async with self.stats_lock:
-                self.stats["errors"] += 1
-        except Exception:
-            async with self.stats_lock:
-                self.stats["errors"] += 1
+
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                async with self.stats_lock:
+                    self.stats["errors"] += 1
+            except (aiohttp.ClientError, ConnectionResetError):
+                # ConnectionResetError inclut WinError 10054 sur Windows
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                async with self.stats_lock:
+                    self.stats["errors"] += 1
+            except Exception:
+                async with self.stats_lock:
+                    self.stats["errors"] += 1
+                break
+
         return None
 
     # ------------------------------------------------------------------
@@ -315,61 +455,52 @@ class WebCrawler:
     # ------------------------------------------------------------------
 
     def extract_links(self, base_url: str, html: str) -> set:
-        """Retourne les liens internes (même domaine) présents dans la page."""
+        """
+        Retourne les liens valides présents dans la page.
+
+        Si stay_on_domain=True  → liens internes uniquement (même domaine).
+        Si stay_on_domain=False → tous les liens HTTP/HTTPS (crawl global).
+        """
         soup = BeautifulSoup(html, "lxml")
         base_domain = urlparse(base_url).netloc
+        stay_on_domain = self.config.get("stay_on_domain", True)
         links = set()
-        filtered = 0
 
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
             if not href or href.startswith(("mailto:", "javascript:", "tel:")):
-                filtered += 1
                 continue
             link = urljoin(base_url, href)
             parsed = urlparse(link)
             if parsed.scheme not in ("http", "https"):
-                filtered += 1
                 continue
-            if parsed.netloc == "" or base_domain in parsed.netloc:
-                clean = link.split("#")[0].rstrip("/") or link
-                links.add(clean)
-            else:
-                filtered += 1
+            if stay_on_domain and parsed.netloc and base_domain not in parsed.netloc:
+                continue
+            clean = link.split("#")[0].rstrip("/") or link
+            links.add(clean)
 
-        self.log(f"   [LINKS] Valides={len(links)} | Filtrés={filtered}", "INFO")
         return links
 
     # ------------------------------------------------------------------
     # Pipeline de qualité
     # ------------------------------------------------------------------
 
-    def _passes_pipeline(self, url: str, content: str) -> tuple[bool, str]:
-        """
-        Applique tous les filtres dans l'ordre.
-
-        Returns:
-            (ok, reason)  — reason est non-vide si filtré.
-        """
+    def _passes_pipeline(self, url: str, content: str) -> tuple:
         cfg = self.config
         words = content.split()
         word_count = len(words)
 
-        # 1. Longueur minimale
         if word_count < cfg.get("min_words", 50):
             return False, f"trop court ({word_count} mots)"
 
-        # 2. Longueur maximale (évite les pages-dump géantes)
         max_words = cfg.get("max_words", 100_000)
         if word_count > max_words:
             return False, f"trop long ({word_count} mots)"
 
-        # 3. Ratio lettres / total caractères
         ratio = _letters_ratio(content)
         if ratio < cfg.get("min_letters_ratio", 0.7):
             return False, f"ratio lettres trop faible ({ratio:.2f})"
 
-        # 4. Langue
         target_langs = cfg.get("target_langs", [])
         if target_langs:
             lang = _detect_lang(content)
@@ -379,7 +510,6 @@ class WebCrawler:
         return True, ""
 
     def _write_jsonl(self, record: dict):
-        """Écrit un enregistrement dans le fichier JSONL (thread-safe via GIL)."""
         if self._jsonl_file:
             self._jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._jsonl_file.flush()
@@ -391,11 +521,9 @@ class WebCrawler:
     async def process_url(self, url: str, depth: int,
                           session: aiohttp.ClientSession,
                           queue: asyncio.Queue):
-        """Pipeline complet : fetch → extract → filtre → save."""
         # --- Filtre URL ---
         blacklist = self.config.get("url_blacklist", [])
         if _is_url_blacklisted(url, blacklist):
-            self.log(f"   [SKIP-URL] Blacklistée : {url}", "INFO")
             async with self.stats_lock:
                 self.stats["skipped_url"] += 1
             return
@@ -407,27 +535,12 @@ class WebCrawler:
             if self.stats["visited"] >= self.config["max_pages"]:
                 return
             if depth > self.config["max_depth"]:
-                self.log(f"[SKIP] Profondeur max atteinte : {url}", "WARN")
-                return
-
-        # --- Vérification HEAD ---
-        if not await self.check_access(session, url):
-            return
-
-        # --- Marquer comme visité ---
-        async with self.visited_lock:
-            if url in self.visited:
                 return
             self.visited.add(url)
 
         async with self.stats_lock:
             self.stats["visited"] += 1
-            progress = self.stats["visited"]
-
-        self.log(
-            f"\n[CRAWL] depth={depth} | {progress}/{self.config['max_pages']} | {url}",
-            "INFO",
-        )
+        self._update_bars(visited_delta=1)
 
         # --- Fetch ---
         html = await self.fetch(session, url)
@@ -440,10 +553,8 @@ class WebCrawler:
         # --- Déduplication ---
         content_hash = _sha256(content)
         if self.database.hash_exists(content_hash):
-            self.log(f"   [SKIP-DUP] Contenu en double : {url}", "INFO")
             async with self.stats_lock:
                 self.stats["skipped_dup"] += 1
-            # On extrait quand même les liens pour continuer l'exploration
             links = self.extract_links(url, html)
             async with self.visited_lock:
                 for link in links:
@@ -454,7 +565,6 @@ class WebCrawler:
         # --- Pipeline qualité + langue ---
         ok, reason = self._passes_pipeline(url, content)
         if not ok:
-            self.log(f"   [SKIP-Q] {reason} : {url}", "INFO")
             async with self.stats_lock:
                 if "langue" in reason:
                     self.stats["skipped_lang"] += 1
@@ -483,11 +593,12 @@ class WebCrawler:
         if saved:
             async with self.stats_lock:
                 self.stats["saved"] += 1
-            self.log(
-                f"   [SAVED] « {title[:60] or url} » — {word_count} mots",
-                "INFO",
-            )
-            # Export JSONL
+            self._update_bars(saved_delta=1)
+            tqdm.write(self._colorize(
+                f"[SAVED] « {title[:70] or url} » — {word_count} mots | {url}",
+                "SUCCESS",
+            ))
+            self._log_progress()
             self._write_jsonl({
                 "text": content,
                 "url": url,
@@ -496,16 +607,10 @@ class WebCrawler:
             })
 
         # --- Enfile les liens ---
-        new_links = 0
         async with self.visited_lock:
             for link in links:
                 if link not in self.visited:
                     await queue.put((link, depth + 1))
-                    new_links += 1
-
-        self.log(
-            f"   [QUEUE] +{new_links} liens | file={queue.qsize()} URLs", "INFO"
-        )
 
     # ------------------------------------------------------------------
     # Workers
@@ -513,11 +618,9 @@ class WebCrawler:
 
     async def worker(self, worker_id: int, session: aiohttp.ClientSession,
                      queue: asyncio.Queue):
-        """Worker qui dépile et traite les URLs."""
-        self.log(f"[WORKER-{worker_id}] Démarré", "INFO")
         while self.is_running:
             try:
-                url, depth = await asyncio.wait_for(queue.get(), timeout=2.0)
+                url, depth = await asyncio.wait_for(queue.get(), timeout=3.0)
 
                 async with self.stats_lock:
                     pages_done = self.stats["visited"]
@@ -527,7 +630,6 @@ class WebCrawler:
 
                 await self.process_url(url, depth, session, queue)
                 queue.task_done()
-                await asyncio.sleep(self.config.get("politeness_delay", 0.1))
 
             except asyncio.TimeoutError:
                 async with self.stats_lock:
@@ -542,33 +644,29 @@ class WebCrawler:
                 except Exception:
                     pass
 
-        self.log(f"[WORKER-{worker_id}] Terminé", "INFO")
-
     # ------------------------------------------------------------------
     # BFS
     # ------------------------------------------------------------------
 
-    async def crawl_bfs(self, start_url: str, session: aiohttp.ClientSession):
-        """Lance le crawl BFS avec workers parallèles."""
+    async def _run_bfs(self, seed_urls: list, session: aiohttp.ClientSession):
+        """Lance un BFS à partir d'une ou plusieurs URLs de départ."""
         queue: asyncio.Queue = asyncio.Queue()
-        await queue.put((start_url, 0))
+        for url in seed_urls:
+            await queue.put((url, 0))
 
         num_workers = self.config["num_workers"]
-        self.log(f"[INFO] Lancement de {num_workers} workers parallèles", "INFO")
-
         workers = [
             asyncio.create_task(self.worker(i + 1, session, queue))
             for i in range(num_workers)
         ]
         await asyncio.gather(*workers, return_exceptions=True)
-        self.log("[INFO] Tous les workers ont terminé", "INFO")
 
     # ------------------------------------------------------------------
     # Point d'entrée
     # ------------------------------------------------------------------
 
     async def _crawl_site(self, start_url: str, session: aiohttp.ClientSession):
-        """Crawl BFS d'un seul site. Reset visited, applique la limite par site."""
+        """Crawl BFS d'un seul site (remet visited à zéro, respecte max_pages_per_site)."""
         async with self.visited_lock:
             self.visited.clear()
 
@@ -578,82 +676,121 @@ class WebCrawler:
             self._site_max_pages = self._site_pages_start + max_per_site
 
         self.log(f"[SITE] Début : {start_url}", "INFO")
-        await self.crawl_bfs(start_url, session)
+        await self._run_bfs([start_url], session)
 
         async with self.stats_lock:
             pages_this_site = self.stats["visited"] - self._site_pages_start
-        self.log(f"[SITE] Fin : {start_url} — {pages_this_site} pages", "INFO")
+        self.log(f"[SITE] Fin : {start_url} — {pages_this_site} pages visitées", "INFO")
+
+    async def _crawl_global(self, start_urls: list, session: aiohttp.ClientSession):
+        """
+        Crawl global (stay_on_domain=False) : BFS unique sur tout internet,
+        seedé par tous les start_urls. visited n'est pas remis à zéro.
+        """
+        self._site_max_pages = self.config["max_pages"]
+        self.log(f"[INFO] Mode crawl global — {len(start_urls)} URL(s) de départ", "INFO")
+        await self._run_bfs(start_urls, session)
 
     async def run_all(self, start_urls: list) -> dict:
-        """Crawl une liste de sites séquentiellement.
+        """
+        Crawl une liste de sites.
 
-        Pour chaque site :
-        - le set visited est remis à zéro (on repart de la racine)
-        - la déduplication par hash reste active globalement
-        - on s'arrête dès que max_pages (global) ou max_pages_per_site est atteint
+        - stay_on_domain=True  (défaut) : crawl séquentiel site par site
+        - stay_on_domain=False           : BFS unique "tout internet"
         """
         self.is_running = True
         self.visited_lock = asyncio.Lock()
         self.stats_lock = asyncio.Lock()
         start_time = time.time()
+        max_pages = self.config["max_pages"]
 
         jsonl_path = self.config.get("jsonl_output", "data/datasets/dataset.jsonl")
         os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
         self._jsonl_file = open(jsonl_path, "a", encoding="utf-8")
 
+        # Barres de progression
+        self._pbar_visited = tqdm(
+            total=max_pages,
+            desc="  Visitées",
+            unit="page",
+            colour="cyan",
+            position=0,
+            leave=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}",
+        )
+        self._pbar_saved = tqdm(
+            total=max_pages,
+            desc="  Sauvées ",
+            unit="page",
+            colour="green",
+            position=1,
+            leave=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]{postfix}",
+        )
+
         connector = aiohttp.TCPConnector(
             limit=self.config["concurrency"],
             ttl_dns_cache=300,
+            enable_cleanup_closed=True,
         )
 
         try:
-            async with aiohttp.ClientSession(
-                connector=connector,
-                headers={"Accept-Encoding": "gzip, br"},
-            ) as session:
-                for i, url in enumerate(start_urls):
-                    if not self.is_running:
-                        break
-                    async with self.stats_lock:
-                        global_done = self.stats["visited"] >= self.config["max_pages"]
-                    if global_done:
-                        self.log("[INFO] Limite globale atteinte — arrêt.", "INFO")
-                        break
-                    self.log(f"\n[SITES] {i + 1}/{len(start_urls)} → {url}", "INFO")
-                    await self._crawl_site(url, session)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                if not self.config.get("stay_on_domain", True):
+                    # --- Mode internet global ---
+                    await self._crawl_global(start_urls, session)
+                else:
+                    # --- Mode classique site par site ---
+                    for i, url in enumerate(start_urls):
+                        if not self.is_running:
+                            break
+                        async with self.stats_lock:
+                            global_done = self.stats["visited"] >= self.config["max_pages"]
+                        if global_done:
+                            self.log("[INFO] Limite globale atteinte — arrêt.", "INFO")
+                            break
+                        self.log(f"\n[SITES] {i + 1}/{len(start_urls)} → {url}", "INFO")
+                        await self._crawl_site(url, session)
         finally:
             if self._jsonl_file:
                 self._jsonl_file.close()
                 self._jsonl_file = None
+            if self._pbar_visited:
+                self._pbar_visited.close()
+                self._pbar_visited = None
+            if self._pbar_saved:
+                self._pbar_saved.close()
+                self._pbar_saved = None
 
         elapsed = time.time() - start_time
         speed = self.stats["visited"] / elapsed if elapsed > 0 else 0
 
         sep = "=" * 70
-        self.log(f"\n{sep}", "INFO")
-        self.log("  STATISTIQUES FINALES", "INFO")
-        self.log(sep, "INFO")
-        self.log(f"  Sites traités        : {len(start_urls)}", "INFO")
-        self.log(f"  Pages visitées       : {self.stats['visited']}", "INFO")
-        self.log(f"  Pages sauvées        : {self.stats['saved']}", "INFO")
-        self.log(f"  Requêtes HTTP        : {self.stats['requests']}", "INFO")
-        self.log(f"  Accès bloqués        : {self.stats['blocked']}", "WARN")
-        self.log(f"  Erreurs              : {self.stats['errors']}", "INFO")
-        self.log(f"  Skip URL blacklist   : {self.stats['skipped_url']}", "INFO")
-        self.log(f"  Skip doublons        : {self.stats['skipped_dup']}", "INFO")
-        self.log(f"  Skip langue          : {self.stats['skipped_lang']}", "INFO")
-        self.log(f"  Skip qualité         : {self.stats['skipped_quality']}", "INFO")
-        self.log(f"  Durée                : {elapsed:.2f} s", "INFO")
-        self.log(f"  Vitesse              : {speed:.2f} pages/s", "INFO")
-        self.log(f"  Dataset JSONL        : {jsonl_path}", "INFO")
-        self.log(sep, "INFO")
+        lines = [
+            f"\n{sep}",
+            "  STATISTIQUES FINALES",
+            sep,
+            f"  Pages visitées       : {self.stats['visited']}",
+            f"  Pages sauvées        : {self.stats['saved']}",
+            f"  Requêtes HTTP        : {self.stats['requests']}",
+            f"  Accès bloqués        : {self.stats['blocked']}",
+            f"  Erreurs              : {self.stats['errors']}",
+            f"  Skip URL blacklist   : {self.stats['skipped_url']}",
+            f"  Skip doublons        : {self.stats['skipped_dup']}",
+            f"  Skip langue          : {self.stats['skipped_lang']}",
+            f"  Skip qualité         : {self.stats['skipped_quality']}",
+            f"  Durée                : {elapsed:.2f} s",
+            f"  Vitesse              : {speed:.2f} pages/s",
+            f"  Dataset JSONL        : {jsonl_path}",
+            sep,
+        ]
+        for line in lines:
+            tqdm.write(line)
 
         return self.stats
 
     async def run(self, start_url: str) -> dict:
-        """Raccourci pour crawler un seul site."""
         return await self.run_all([start_url])
 
     def stop(self):
-        """Arrête le crawler proprement."""
         self.is_running = False

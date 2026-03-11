@@ -365,3 +365,41 @@ class Tokenizer:
         tokens = self.tokenize_text(text)
         unk_id = self.token_to_id["<UNK>"]
         return [self.token_to_id.get(t, unk_id) for t in tokens]
+    
+
+    def encode_corpus(self, corpus_path: str) -> List[int]:
+        """_summary_
+        Encode un corpus complet à partir d'un fichier JSONL contenant des textes.
+
+        Args:
+            corpus_path (str): Chemin du fichier JSONL. Chaque ligne doit être un objet JSON avec une clé "text".
+
+        Returns:
+            List[int]: Liste de tokens encodés pour l'ensemble du corpus.
+        """
+        tokens: List[int] = []
+        with open(corpus_path, "r", encoding="utf-8") as f:
+            for line in tqdm(f, desc="Encoding corpus"):
+                data = json.loads(line)
+                text = data.get("text", "")
+                tokens.extend(self.encode(text))
+        return tokens
+
+    # ------------------------------------------------------------------
+    # Méthodes utilitaires + accesseurs
+    # ------------------------------------------------------------------
+
+
+    def vocab_size(self) -> int:
+        return len(self.vocab)
+    
+    def get_vocab(self) -> set[str]:
+        return self.vocab
+    
+    def get_token_to_id(self) -> Dict[str, int]:
+        return self.token_to_id
+    
+    def get_id_to_token(self) -> Dict[int, str]:
+        return self.id_to_token
+    
+    

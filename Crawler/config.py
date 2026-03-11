@@ -1,44 +1,47 @@
 # -*- coding: utf-8 -*-
 """
+config.py
+
 Configuration du crawler web.
 Modifier ce fichier pour paramétrer le crawl, puis lancer :
     python crawl.py
 """
 
 CRAWLER_CONFIG = {
-    # --- Sites à crawler (parcourus dans l'ordre) ---
-    # Dès qu'un site est épuisé (ou que max_pages_per_site est atteint), on passe au suivant.
+    # --- Sites à crawler ---
+    # En mode stay_on_domain=True  → crawlés séquentiellement (1 BFS par site)
+    # En mode stay_on_domain=False → tous seedés dans un seul BFS global
     "start_urls": [
         "https://www.lexilogos.com/dictionnaire_langues.htm",
-        "https://www.bnf.fr/fr/dictionnaires-de-langue-en-ligne",
-        "https://forums.jeuxonline.info/sujet/736796/tuto-comment-cuisiner-son-caca-irl",
-        "https://www.charleville-sedan-tourisme.fr/preparez-votre-sejour/gastronomie/recettes/la-cacasse-a-cul-nu/",
-        "https://lamentable.fr/2020/03/22/gaspillage-alimentaire-manger-ses-selles-permettrait-de-digerer-deux-fois-plus-de-nourriture/",
         "https://www.lamontagne.fr/",
         "https://dictionnaire.lerobert.com/fr/",
         "https://www.dictionnaire-academie.fr/",
         "https://usito.usherbrooke.ca/index/mots",
         "https://www.iro.umontreal.ca/~pift1146/exemples/fonctions/phrases.htm",
-        "https://marentreefacile.com/collections/dictionnaires?srsltid=AfmBOoqb2MR8G0I__9rt8zEsGGVHmerZAVAyFb8JjUBoRs-sUQHirmE4",
-        "https://actu.epfl.ch/news/tous-les-mots-de-toutes-les-langues-dans-un-seul-d/"
-
-
+        "https://actu.epfl.ch/news/tous-les-mots-de-toutes-les-langues-dans-un-seul-d/",
     ],
 
+    # --- Mode de crawl ---
+    # True  → crawl intra-site uniquement (comportement original)
+    # False → suit tous les liens externes = explore tout internet
+    "stay_on_domain": False,
+
     # --- Limites ---
-    "max_pages": 100000,          # Limite GLOBALE (tous sites confondus)
-    "max_pages_per_site": 1000,  # Limite PAR SITE avant de passer au suivant
-    "max_depth": 10,              # Profondeur de récursion max (0 = page de départ seule)
+    "max_pages": 100_000,         # Limite GLOBALE (tous sites confondus)
+    "max_pages_per_site": 1_000,  # Limite PAR SITE (ignorée si stay_on_domain=False)
+    "max_depth": 10,              # Profondeur de récursion max
 
     # --- Parallélisme ---
-    "num_workers": 20,             # Nombre de workers asynchrones par site
+    "num_workers": 20,            # Nombre de workers asynchrones
     "concurrency": 50,            # Nb max de connexions TCP simultanées
 
-    # --- Délai de politesse ---
-    "politeness_delay": 0.3,      # Délai (secondes) entre deux requêtes par worker
+    # --- Délai de politesse (par domaine) ---
+    # Délai minimum entre deux requêtes vers le même domaine.
+    # Un jitter aléatoire de ±(politeness_delay × jitter_ratio) est ajouté.
+    "politeness_delay": 0.5,      # secondes (augmenté pour éviter les blocages)
+    "jitter_ratio": 0.5,          # 0.5 = ±50 % de jitter
 
     # --- Rotation User-Agent ---
-    # Laisser vide [] pour utiliser les UA intégrés par défaut.
     "user_agents": [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -47,34 +50,35 @@ CRAWLER_CONFIG = {
         "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 "
         "(KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
     ],
 
     # --- Rotation de proxies ---
     # Format : "http://user:pass@host:port"  ou  "http://host:port"
-    # Laisser vide [] pour connexion directe (sans proxy).
+    # Laisser vide [] pour connexion directe.
     "proxies": [
         # "http://proxy1.example.com:8080",
-        # "http://user:pass@proxy2.example.com:3128",
     ],
-    # Durée (secondes) pendant laquelle un proxy pénalisé (403/429) est mis de côté
-    "proxy_cooldown": 60.0,
+    "proxy_cooldown": 60.0,       # Durée (s) de mise en quarantaine d'un proxy bloqué
 
     # --- Filtre qualité du texte ---
-    "min_words": 10,              # Ignorer les pages avec moins de N mots
-    "max_words": 100_000,         # Ignorer les pages avec plus de N mots (dumps géants)
-    "min_letters_ratio": 0.70,    # Proportion min de caractères alphabétiques (0.0 – 1.0)
+    "min_words": 10,
+    "max_words": 100_000,
+    "min_letters_ratio": 0.70,
 
     # --- Filtre de langue ---
     # Codes ISO 639-1. Laisser vide [] pour tout accepter.
     "target_langs": ["fr"],
 
     # --- Filtre URL ---
-    # Pages dont l'URL contient un de ces tokens sont ignorées.
     "url_blacklist": [
         "login", "signin", "signup", "register",
         "logout", "account", "password",
         "privacy", "cookies", "terms", "legal",
         "cart", "checkout", "panier",
+        ".pdf", ".jpg", ".jpeg", ".png", ".gif",
+        ".zip", ".exe", ".mp3", ".mp4",
     ],
 
     # --- Sorties ---

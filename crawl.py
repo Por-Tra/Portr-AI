@@ -15,7 +15,15 @@ import argparse
 import sys
 import os
 
-# Assure que le dossier racine est dans le path
+# ── Fix Windows : le ProactorEventLoop (défaut sur Python 3.8+/Windows) lève
+# des ConnectionResetError / WinError 10054 sur les connexions fermées par le
+# serveur distant. SelectorEventLoop ne présente pas ce bug avec aiohttp.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # Silence les tracebacks asyncio internes résiduels (ex: _call_connection_lost)
+    import logging
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from Crawler.config import CRAWLER_CONFIG
@@ -55,7 +63,7 @@ def parse_args(config: dict) -> dict:
         nargs="+",
         default=None,
         metavar="URL",
-        help="URL(s) de départ, séparées par des espaces (écrase start_urls de config.py)",
+        help="URL(s) de départ (écrase start_urls de config.py)",
     )
     parser.add_argument(
         "--max-pages",
@@ -128,7 +136,6 @@ async def main():
             log("\n[INFO] Interruption clavier — arrêt en cours…", "WARN")
             crawler.stop()
 
-        # Statistiques DB
         stats = db.get_statistics()
         if stats:
             log("\n  BASE DE DONNÉES", "INFO")

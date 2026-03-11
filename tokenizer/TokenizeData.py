@@ -1,8 +1,9 @@
 """
 TokenizeData.py
 
-Fichier à exécuter pour tokeniser les données brutes récupérées par le crawler.
-
+fichier qui sert au lancement et la configuration du processus de tokenisation des données textuelles brutes. 
+Il utilise la classe Tokenizer pour entraîner un modèle de tokenisation sur les données textuelles extraites par le crawler, 
+puis sauvegarde ce modèle pour une utilisation ultérieure dans le pipeline d'entraînement du modèle GPT.
 
 """
 
@@ -53,6 +54,3 @@ def TokenizeData():
     tok.save()
 
     print("Tokenizer saved")
-
-if __name__ == "__main__":
-    TokenizeData()
