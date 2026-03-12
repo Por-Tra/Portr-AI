@@ -47,11 +47,17 @@ BATCH_SIZE = 32
 
 def main():
 
+    print("Starting main process...")
+
     # Étape 1 : Tokenisation des données
+    print("Tokenizing data...")
     td.TokenizeData()
 
     # Étape 2 : Création du dataset
     # charger les tokens depuis le tokenizer
+    print("Loading tokenizer model...")
+
+
     try:
         tok = td.Tokenizer.load()
     except FileNotFoundError:
@@ -61,6 +67,8 @@ def main():
     tokens = tok.encode_corpus("data/datasets/dataset.jsonl")
 
     # Étape 3 : Création du dataset GPT
+
+    print("Creating dataset...")
 
     dataset = TextDataset(tokens, SEQ_LENGTH)
 
@@ -75,7 +83,8 @@ def main():
 
 
 
-
+if __name__ == "__main__":
+    main()
 
 
 

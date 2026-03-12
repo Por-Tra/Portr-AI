@@ -7,7 +7,8 @@ puis sauvegarde ce modèle pour une utilisation ultérieure dans le pipeline d'e
 
 """
 
-from tokenizer import Tokenizer
+
+from tokenizer.tokenizer import Tokenizer
 import json
 import sys
 

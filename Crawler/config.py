@@ -12,13 +12,7 @@ CRAWLER_CONFIG = {
     # En mode stay_on_domain=True  → crawlés séquentiellement (1 BFS par site)
     # En mode stay_on_domain=False → tous seedés dans un seul BFS global
     "start_urls": [
-        "https://www.lexilogos.com/dictionnaire_langues.htm",
-        "https://www.lamontagne.fr/",
-        "https://dictionnaire.lerobert.com/fr/",
-        "https://www.dictionnaire-academie.fr/",
-        "https://usito.usherbrooke.ca/index/mots",
-        "https://www.iro.umontreal.ca/~pift1146/exemples/fonctions/phrases.htm",
-        "https://actu.epfl.ch/news/tous-les-mots-de-toutes-les-langues-dans-un-seul-d/",
+        "http://mumm.hautetfort.com/tres_long_texte/"
     ],
 
     # --- Mode de crawl ---
@@ -27,9 +21,9 @@ CRAWLER_CONFIG = {
     "stay_on_domain": False,
 
     # --- Limites ---
-    "max_pages": 100_000,         # Limite GLOBALE (tous sites confondus)
+    "max_pages": 100000,         # Limite GLOBALE (tous sites confondus)
     "max_pages_per_site": 1_000,  # Limite PAR SITE (ignorée si stay_on_domain=False)
-    "max_depth": 10,              # Profondeur de récursion max
+    "max_depth": 100,              # Profondeur de récursion max
 
     # --- Parallélisme ---
     "num_workers": 20,            # Nombre de workers asynchrones

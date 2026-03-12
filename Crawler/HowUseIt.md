@@ -91,3 +91,8 @@ diply.com (pas de robots.txt)
 
 # Site de media comme bfmtv.com, cnews, ...
 # ========================================================================================
+
+
+# meilleur site :
+http://mumm.hautetfort.com/tres_long_texte/
+
