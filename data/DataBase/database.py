@@ -110,7 +110,7 @@ class Database:
 
     def insert_page(self, url: str, title: str, content: str, content_hash: str,
                     depth: int, status_code: int, word_count: int,
-                    link_count: int) -> bool:
+                    link_count: int, commit: bool = True) -> bool:
         """
         Insère ou met à jour une page.
 
@@ -135,10 +135,20 @@ class Database:
                     link_count   = excluded.link_count
             """, (url, domain, title, content, content_hash, depth,
                   status_code, word_count, link_count))
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
             return True
         except sqlite3.Error as e:
             print(f"[DB ERROR] insert_page : {e}")
+            return False
+
+    def commit(self) -> bool:
+        """Valide explicitement la transaction courante."""
+        try:
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"[DB ERROR] commit : {e}")
             return False
 
     def hash_exists(self, content_hash: str) -> bool:

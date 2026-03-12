@@ -4,6 +4,7 @@ dataset.jsonl
 bpe_model.json
 test
 test.py
+ingest_checkpoints
 
 
 #=========================================================

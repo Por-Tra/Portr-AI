@@ -21,3 +21,12 @@
 
 # Etape 3 : Tokenisation et création du dataset
 
+
+
+# -------------------------------------------------------------------------------------------
+
+# Outils externes à l'IA Génératrice
+* Outils de web scraping : WebCrawler -> activation : python crawler.py
+* Outils de prétraitement de données : nettoyage, tokenisation, etc. -> activation : python clean_db.py
+* outils d'ingestion de données local : ingestion de données à partir de fichiers locaux (PDF, TXT, etc.) -> activation : python ingest_local.py | exemple conseiller pour wikipédia FR :
+python ingest_local.py --files "C:\Users\lucas\Downloads\wikipedia_fr_all_nopic_2026-02.zim" --commit-every 200 --flush-every 200 --progress-every 250 --checkpoint-every 2000
