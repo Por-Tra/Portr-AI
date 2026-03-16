@@ -6,6 +6,7 @@ test
 test.py
 ingest_checkpoints
 crawler.db-journal
+rapel
 
 #=========================================================
 # Ignore the .env file with environment variables

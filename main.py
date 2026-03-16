@@ -38,7 +38,7 @@ from data.dataset import TextDataset
 
 
 # Variable de configuration des données et du modèle
-td.VOCAB_SIZE = td.VOCAB_SIZE # changer ça pour ajuster la taille du vocablaire
+td.VOCAB_SIZE = 50_000 # changer ça pour ajuster la taille du vocablaire
 
 # Variable de configuration des sequences
 SEQ_LENGTH = 128
@@ -66,7 +66,7 @@ def main():
     
     tokens = tok.encode_corpus("data/datasets/dataset.jsonl")
 
-    # Étape 3 : Création du dataset GPT
+    # Étape 3 : Création du dataset pour l'entraînement du modèle
 
     print("Creating dataset...")
 
@@ -79,6 +79,49 @@ def main():
     )
 
     print("Dataset size:", len(dataset))
+
+    # Affichage test
+    print("Test dataset:")
+    print("-" * 20)
+    print("Example sample")
+
+    x, y = dataset[0]
+
+    print("input :", x)
+    print("target:", y)
+
+    print("input shape :", x.shape)
+    print("target shape:", y.shape)
+    print("-" * 20)
+    print("Test dataloader:")
+    batch_x, batch_y = next(iter(dataloader))
+
+    print("Batch input shape :", batch_x.shape)
+    print("Batch target shape:", batch_y.shape)
+    print("-" * 20)
+
+
+    # Étape 4 : Entraînement du modèle
+#     model
+#    ├ embedding
+#    ├ transformer
+#    └ head
+
+    print("Training model...")
+
+    # Première couche du model : embedding
+
+
+
+
+    # Deuxième couche du model : transformer
+
+
+
+
+
+    # Troisième couche du model : head (couche de sortie)
+
 
 
 

@@ -40,6 +40,7 @@ class TextDataset(Dataset):
         x = self.tokens[idx:idx+self.seq_length]
         y = self.tokens[idx+1:idx+self.seq_length+1]
 
-        return torch.tensor(x), torch.tensor(y)
+        # return torch.tensor(x), torch.tensor(y)
+        return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
 
 

@@ -356,7 +356,7 @@ def ingest_zim(path: Path, db: Database, config: dict,
             total=archive.entry_count,
             initial=start_index,
             desc=f"  ZIM {zim_name[:30]}",
-            unit="ent",
+            unit="ent", # abréviation pour "entrée"
             colour="blue",
             dynamic_ncols=True,
             mininterval=0.5,
@@ -726,7 +726,7 @@ def main():
     print(sep)
     print(f"  INGESTION LOCALE — {len(files)} fichier(s)")
     if zim_count:
-        print(f"  ⚠  {zim_count} fichier(s) ZIM détecté(s) — peut prendre plusieurs heures")
+        print(f"  [WARN]  {zim_count} fichier(s) ZIM détecté(s) — peut prendre plusieurs heures")
     print(sep)
     for f in files:
         tag = "[ZIM]" if f.suffix.lower() == ".zim" else "     "
