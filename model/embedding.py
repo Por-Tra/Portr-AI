@@ -20,23 +20,34 @@ import torch
 
 class Embedding:
     """
-    Schéma complet de l'ordre d'exe
-        tokens
+    1. Architecture réelle (simplifiée)
+
+    Dans un GPT, l’entrée du modèle est construite comme ça :
+
+    tokens
     [batch, seq]
 
     ↓ token embedding
-
     [batch, seq, dim]
 
     ↓ position embedding
-
     [batch, seq, dim]
 
     ↓ addition
+    [batch, seq, dim]
 
+    ↓ layer normalization  ← détail important
+    [batch, seq, dim]
+
+    ↓ dropout
     [batch, seq, dim]
 
     ↓ transformer
+
+    Les deux éléments souvent oubliés :
+
+    - LayerNorm
+    - Dropout
     """
 
     def __init__(self, vocab_size, embedding_dim, embedding_DIM = 256):
@@ -51,6 +62,29 @@ class Embedding:
 
         self.EMBEDDING_DIM = embedding_DIM
 
+    def start(self):
+        """
+        Initialise la pipeline d'embedding.
+
+        ↓ token embedding
+        [batch, seq, dim]
+
+        ↓ position embedding
+        [batch, seq, dim]
+
+        ↓ addition
+        [batch, seq, dim]
+
+        ↓ layer normalization  ← détail important
+        [batch, seq, dim]
+
+        ↓ dropout
+        [batch, seq, dim]
+        """
+
+
+       
+
     def token_Embedding(self, tokens):
         # token_id -> vecteur
         pass
@@ -64,4 +98,15 @@ class Embedding:
         # input = token_embedding + position_embedding
         
         pass
+
+    def addition(self):
+        pass
+
+    def layer_normalization(self):
+        pass
+
+    def dropout(self):
+        pass
+
+    
 

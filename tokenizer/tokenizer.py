@@ -1,5 +1,7 @@
 """Implémentation optimisée de Byte Pair Encoding (BPE).
 
+
+Version 1.1
 Optimisations clés vs version naïve :
 ─────────────────────────────────────────────────────────────────────────────
 | Problème original          | Solution appliquée                           |
@@ -20,6 +22,12 @@ Usage :
     from tokenizer.tokenizer import Tokenizer
     tok = Tokenizer.load("tokenizer/token/bpe_model.json")
     tokens = tok.tokenize_text("votre texte à tokeniser ici")
+
+Version 1.2
+
+Limiter le corpus d'entraînement aux mots pour éviter les redondances massives (ex: "the" 10 000 fois) :
+
+
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from tqdm import tqdm
 DEFAULT_MODEL_PATH = "tokenizer/token/bpe_model.json"
 SPACE_TOKEN = "▁"
 
+LIMIT_CORPUS = 50_000
 
 class Tokenizer:
     """Tokeniseur BPE caractère -> sous-mots (implémentation optimisée)."""
@@ -82,7 +91,9 @@ class Tokenizer:
         Cela réduit drastiquement le coût des itérations suivantes.
         """
         word_freq: Dict[Tuple[str, ...], int] = defaultdict(int)
-        for text in tqdm(texts, desc="Preparing corpus"):
+        for i, text in enumerate(tqdm(texts, desc="Preparing corpus"), start=1):
+            if LIMIT_CORPUS and i > LIMIT_CORPUS:
+                break
             for token in self.split_text(text):
                 token = self.normalize_token(token)
                 key = tuple(self.prepare_word(token))
