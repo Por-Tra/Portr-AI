@@ -22,7 +22,10 @@ sortie
 
 import torch
 import torch.nn as nn
-from attention import Attention
+try:
+    from .attention import Attention
+except ImportError:
+    from attention import Attention
 
 
 class MLP(nn.Module):

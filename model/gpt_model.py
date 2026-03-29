@@ -29,8 +29,12 @@ Logits (convertis en probabilités par softmax pendant l'inférence)
 
 import torch
 import torch.nn as nn
-from embedding import Embedding
-from transformer_block import TransformerBlock
+try:
+    from .embedding import Embedding
+    from .transformer_block import TransformerBlock
+except ImportError:
+    from embedding import Embedding
+    from transformer_block import TransformerBlock
 
 
 class GPT(nn.Module):

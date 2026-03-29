@@ -1,149 +1,196 @@
 """
 main.py
 
-!! Lancer ce fichier pour exécuter tout le processus du model.
-
-pipeline principal du projet, orchestrant le processus de tokenisation, de création du dataset et d'entraînement du modèle.
-crawler
-↓
-corpus texte
-↓
-tokenizer
-↓
-tokens
-↓
-dataset GPT  ← ÉTAPE 3
-↓
-embedding
-↓
-transformer
-↓
-training
-
-Important
-======================================================================
-| On ne met pas le crawler ici, se sera la seul exception, le crawler est un processus à part qui doit être exécuté manuellement pour récupérer les données brutes. 
-| Le reste du pipeline (tokenisation, création du dataset, entraînement du modèle) peut être automatisé et orchestré à partir de ce fichier main.py.
-|
-|
-|
-|
+Pipeline principal du projet:
+1) Tokenisation
+2) Encodage du corpus
+3) Construction dataset/dataloader
+4) Entrainement GPT
+5) Sauvegarde checkpoint
+6) Inference de test
 """
 
+from __future__ import annotations
 
-import data.dataset as ds
-import tokenizer.TokenizeData as td
+from pathlib import Path
+import sys
+
+import torch
 from torch.utils.data import DataLoader
+
+import tokenizer.TokenizeData as td
 from data.dataset import TextDataset
-import model.embedding as embedding
+from training.loss import autoregressive_cross_entropy, perplexity_from_loss
+from training.optimizer import create_adamw_optimizer
+from training.train import TrainConfig, train_model
+from inference.generate import generate_from_prompt
 
 
-# Variable de configuration des données et du modèle
-td.VOCAB_SIZE = 50_000 # changer ça pour ajuster la taille du vocablaire
+# Make model directory importable (gpt_model imports local files inside model/).
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from model.gpt_model import GPT
+
+
+# -----------------------------------------------------------------------------
+# Variable de configuration des donnees et du modele
+# -----------------------------------------------------------------------------
+td.VOCAB_SIZE = 50_000  # changer ca pour ajuster la taille du vocablaire
 
 # Variable de configuration des sequences
 SEQ_LENGTH = 128
 BATCH_SIZE = 32
 
+# Training config
+EMBEDDING_DIM = 256
+NUM_HEADS = 8
+NUM_BLOCKS = 4
+DROPOUT = 0.1
+LEARNING_RATE = 3e-4
+WEIGHT_DECAY = 0.01
+EPOCHS = 1
+MAX_STEPS_PER_EPOCH = 200  # evite un run infini sur gros dataset
+GRAD_CLIP = 1.0
 
-def main():
+# Pipeline controls
+RUN_TOKENIZER_TRAINING = True
+DATASET_JSONL_PATH = "data/datasets/dataset.jsonl"
+CHECKPOINT_DIR = "artifacts/checkpoints"
+CHECKPOINT_NAME = "gpt_latest.pt"
 
-    print("Starting main process...")
-
-    # Étape 1 : Tokenisation des données
-    print("Tokenizing data...")
-    td.TokenizeData()
-
-    # Étape 2 : Création du dataset
-    # charger les tokens depuis le tokenizer
-    print("Loading tokenizer model...")
+# Inference config
+INFER_PROMPT = "bonjour je suis"
+INFER_MAX_NEW_TOKENS = 40
+INFER_TEMPERATURE = 0.9
+INFER_TOP_K = 20
 
 
-    try:
-        tok = td.Tokenizer.load()
-    except FileNotFoundError:
-        print("[main.py]Erreur lors de l'ouverture du chargement des données")
-        return
-    
-    tokens = tok.encode_corpus("data/datasets/dataset.jsonl")
+def _validate_files() -> bool:
+    if not Path(DATASET_JSONL_PATH).exists():
+        print(f"[main] dataset introuvable: {DATASET_JSONL_PATH}")
+        return False
+    return True
 
-    # Étape 3 : Création du dataset pour l'entraînement du modèle
 
-    print("Creating dataset...")
+def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
+    print("[main] encodage du corpus...")
+    tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH)
+    print(f"[main] nb tokens encodes: {len(tokens)}")
+
+    if len(tokens) <= SEQ_LENGTH:
+        raise ValueError(
+            f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. "
+            f"tokens={len(tokens)}"
+        )
 
     dataset = TextDataset(tokens, SEQ_LENGTH)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True
+    print(f"[main] dataset size: {len(dataset)}")
+    batch_x, batch_y = next(iter(dataloader))
+    print(f"[main] batch input shape: {tuple(batch_x.shape)}")
+    print(f"[main] batch target shape: {tuple(batch_y.shape)}")
+    return dataloader, len(tokens)
+
+
+def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]:
+    vocab_size = len(tokenizer_model.get_token_to_id())
+    print(f"[main] vocab_size effective: {vocab_size}")
+
+    model = GPT(
+        vocab_size=vocab_size,
+        seq_length=SEQ_LENGTH,
+        embedding_dim=EMBEDDING_DIM,
+        num_heads=NUM_HEADS,
+        num_blocks=NUM_BLOCKS,
+        dropout=DROPOUT,
     )
 
-    print("Dataset size:", len(dataset))
+    optimizer = create_adamw_optimizer(
+        model=model,
+        lr=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
+    )
 
-    # Affichage test
-    print("Test dataset:")
-    print("-" * 20)
-    print("Example sample")
+    train_cfg = TrainConfig(
+        epochs=EPOCHS,
+        grad_clip=GRAD_CLIP,
+        max_steps_per_epoch=MAX_STEPS_PER_EPOCH,
+        checkpoint_dir=CHECKPOINT_DIR,
+        checkpoint_name=CHECKPOINT_NAME,
+    )
 
-    x, y = dataset[0]
+    history = train_model(
+        model=model,
+        dataloader=dataloader,
+        optimizer=optimizer,
+        loss_fn=autoregressive_cross_entropy,
+        config=train_cfg,
+    )
 
-    print("input :", x)
-    print("target:", y)
+    if history["epoch_losses"]:
+        last_loss = history["epoch_losses"][-1]
+        ppl = perplexity_from_loss(last_loss)
+        print(f"[main] final loss: {last_loss:.4f} | perplexity: {ppl:.2f}")
 
-    print("input shape :", x.shape)
-    print("target shape:", y.shape)
-    print("-" * 20)
-    print("Test dataloader:")
-    batch_x, batch_y = next(iter(dataloader))
-
-    print("Batch input shape :", batch_x.shape)
-    print("Batch target shape:", batch_y.shape)
-    print("-" * 20)
-
-
-    # Étape 4 : Entraînement du modèle
-#     model
-#    ├ embedding
-#    ├ transformer
-#    └ head
-
-    print("Training model...")
-
-    # Première couche du model : embedding
-    print("---"*20)
-    print("Embedding layer...")
-    print("Initializing embedding layer...")
-    embedding = embedding.Embedding(td.VOCAB_SIZE, SEQ_LENGTH, 256)
-
-    print("Testing embedding layer with a batch of data...")
-    batch_x, _ = next(iter(dataloader))
-
-    print("Batch input shape before embedding:", batch_x.shape)
-    out = embedding(batch_x)
-
-    print(out.shape)
+    return model, history
 
 
+def _run_inference(model: GPT, tokenizer_model) -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    token_ids, text = generate_from_prompt(
+        model=model,
+        tokenizer=tokenizer_model,
+        prompt=INFER_PROMPT,
+        max_new_tokens=INFER_MAX_NEW_TOKENS,
+        temperature=INFER_TEMPERATURE,
+        top_k=INFER_TOP_K,
+        device=device,
+    )
+
+    print("[main] inference done")
+    print(f"[main] generated token count: {len(token_ids)}")
+    print(f"[main] generated text:\n{text}")
 
 
-    # Deuxième couche du model : transformer
+def main() -> None:
+    print("[main] pipeline start")
 
+    if not _validate_files():
+        return
 
+    # 1) Tokenization/training tokenizer model
+    if RUN_TOKENIZER_TRAINING:
+        print("[main] tokenization step...")
+        td.TokenizeData()
 
+    # 2) Load tokenizer model
+    print("[main] loading tokenizer...")
+    try:
+        tokenizer_model = td.Tokenizer.load()
+    except FileNotFoundError:
+        print("[main] tokenizer introuvable. Lance d'abord TokenizeData().")
+        return
 
+    # 3) Build dataloader from encoded corpus
+    dataloader, _num_tokens = _build_dataloader(tokenizer_model)
 
-    # Troisième couche du model : head (couche de sortie)
+    # 4) Train GPT
+    model, history = _train_pipeline(dataloader, tokenizer_model)
 
+    # 5) Checkpoint info
+    checkpoint_path = history.get("checkpoint_path")
+    print(f"[main] checkpoint path: {checkpoint_path}")
 
+    # 6) Inference test
+    _run_inference(model, tokenizer_model)
 
+    print("[main] pipeline complete")
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
