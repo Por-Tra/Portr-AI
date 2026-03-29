@@ -1,6 +1,7 @@
 
 
 
+
 # Etape du projet de LLM GPT
 # Etape 1 : Veille et compréhension des concepts clés
 * Comprendre les concepts de base : LLM, GPT, auto‑régression, attention, etc.
@@ -29,4 +30,21 @@
 * Outils de web scraping : WebCrawler -> activation : python crawler.py
 * Outils de prétraitement de données : nettoyage, tokenisation, etc. -> activation : python clean_db.py
 * outils d'ingestion de données local : ingestion de données à partir de fichiers locaux (PDF, TXT, etc.) -> activation : python ingest_local.py | exemple conseiller pour wikipédia FR :
-python ingest_local.py --files "C:\Users\lucas\Downloads\wikipedia_fr_all_nopic_2026-02.zim" --commit-every 200 --flush-every 200 --progress-every 250 --checkpoint-every 2000
+python ingest_local.py --files "file_location" --commit-every 200 --flush-every 200 --progress-every 250 --checkpoint-every 2000
+
+
+# pipeline de développement
+Dataset texte
+Tokenisation (BPE)
+Construction du dataset
+Embedding
+Position encoding
+Self-attention
+Multi-head attention
+Transformer block
+Modèle GPT
+Fonction de perte
+Optimisation (AdamW)
+Entraînement
+Génération de texte
+Scaling et optimisation

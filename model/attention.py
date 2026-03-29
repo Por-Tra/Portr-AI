@@ -1,54 +1,35 @@
 """
 attention.py
 
-Implémentation:
-Q = Query
-K = Key
-V = Value
+Implémentation de l'attention multi-tête causale (style GPT).
 
-Formule de l'attention:
+Formule :
 Attention(Q, K, V) = softmax(QKᵀ / √d) V
-https://fr.wikipedia.org/wiki/Attention_(apprentissage_automatique)
 
-La pipeline:
-embedding
-↓
-Q, K, V projections
-↓
-score = Q @ Kᵀ
-↓
-masque causal (tokens ne voient pas le futur)
-↓
-softmax
-↓
-dropout
-↓
-pondération avec V
-↓
-concat heads + out_proj
-↓
-dropout + connexion résiduelle + LayerNorm
-↓
-output
+La pipeline :
+1. Q, K, V projections -> [B, T, embedding_dim]
+2. Split en heads -> [B, num_heads, T, head_dim]
+3. Scores = Q @ Kᵀ / √d
+4. Masque causal (tokens ne voient pas le futur)
+5. Softmax -> distribution de probabilité
+6. Pondération avec V
+7. Merge heads + projection de sortie
+8. Output -> [B, T, embedding_dim]
+
+NOTE : Les connexions résiduelles et LayerNorm sont gérées
+au niveau du TransformerBlock, pas ici !
 """
 
 import torch
 import torch.nn as nn
-import numpy as np
 
 
 class Attention(nn.Module):
     """
-    Implémentation de l'attention multi-tête causale (style GPT).
-
-    Les deux éléments souvent oubliés :
-    - LayerNorm (appliquée AVANT l'attention, style "pre-norm")
-    - Dropout (sur les poids d'attention ET sur la sortie)
-
-    Les deux éléments souvent carrément absents :
-    - Masque causal (les tokens ne voient pas le futur)
-    - Connexion résiduelle (x + attention(x))
-    - Projection de sortie (out_proj)
+    Implémentation pure du mécanisme d'attention multi-tête causale.
+    
+    Pas de LayerNorm ou résidual ici - juste le calcul d'attention !
+    Le TransformerBlock gère les connexions résiduelles et normalisations.
     """
 
     def __init__(self, embedding_dim: int, num_heads: int = 8, dropout: float = 0.1):
@@ -63,16 +44,13 @@ class Attention(nn.Module):
         self.scale = self.head_dim ** -0.5  # 1 / √d
 
         # Projections linéaires pour Q, K, V
-        self.q_proj    = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.k_proj    = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.v_proj    = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.out_proj  = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.q_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.k_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.v_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        self.out_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
 
-        self.layer_norm   = nn.LayerNorm(embedding_dim)
         self.attn_dropout = nn.Dropout(dropout)
-        self.out_dropout  = nn.Dropout(dropout)
-
-        
+        self.out_dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -82,108 +60,69 @@ class Attention(nn.Module):
             [batch_size, seq_length, embedding_dim]
         """
         B, T, _ = x.size()
-        residual = x
- 
-        x = self._norm(x)
-        Q, K, V = self._project_qkv(x)
-        Q, K, V = self._split_heads(Q, K, V, B, T)
-        x = self._attend(Q, K, V)
-        x = self._merge_heads(x, B, T)
-        x = self._out_project(x)
-        x = self._residual(x, residual)
- 
-        return x
-        
 
-    def _norm(self, x):
-        """
-        Applique la normalisation de couche (LayerNorm) sur l'entrée x.
-
-        Args:
-            x (tensor): _description_
-        """
-        return self.layer_norm(x)
-    
-    def _project_qkv(self, x):
-        """
-        Projette l'entrée x en Q, K, V à l'aide de trois couches linéaires.
-
-        Args:
-            x (tensor): [batch_size, seq_length, embedding_dim]
-
-        Returns:
-            Q, K, V : chacun de shape [batch_size, seq_length, embedding_dim]
-        """
+        # Étape 1 : Projections Q, K, V
         Q = self.q_proj(x)
         K = self.k_proj(x)
         V = self.v_proj(x)
 
-        return Q, K, V
-        
-    def _split_heads(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, B: int, T: int,) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Étape 2 : Split en heads
+        Q, K, V = self._split_heads(Q, K, V, B, T)
+
+        # Étape 3-6 : Attention
+        x = self._attend(Q, K, V, T)
+
+        # Étape 7 : Merge heads
+        x = self._merge_heads(x, B, T)
+
+        # Étape 8 : Projection finale
+        x = self.out_dropout(self.out_proj(x))
+
+        return x
+
+    def _split_heads(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, B: int, T: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Étape 3 — Découpe en heads.
         Divise l'embedding en num_heads sous-espaces indépendants.
-        Chaque head apprend à "regarder" un aspect différent du contexte.
- 
-            [B, T, C] → [B, T, num_heads, head_dim] → [B, num_heads, T, head_dim]
+        
+        [B, T, C] -> [B, T, num_heads, head_dim] -> [B, num_heads, T, head_dim]
         """
         def split(t: torch.Tensor) -> torch.Tensor:
             return t.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
- 
+
         return split(Q), split(K), split(V)
- 
-    def _attend(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,) -> torch.Tensor:
+
+    def _attend(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, T: int) -> torch.Tensor:
         """
-        Étape 4 — Calcul de l'attention.
-        C'est le cœur du mécanisme :
- 
-            scores       = Q @ Kᵀ / √d          → à quel point Q et K sont alignés
-            masque causal                         → on cache le futur (-inf)
-            attn_weights = softmax(scores)        → distribution de probabilité
-            output       = attn_weights @ V       → somme pondérée des valeurs
+        Calcul du mécanisme d'attention.
+        
+        1. Scores = Q @ Kᵀ / √d
+        2. Masque causal (tokens ne voient pas le futur)
+        3. Softmax
+        4. Pondération avec V
         """
-        T = Q.size(-2)
- 
         # Scores bruts : similarité entre chaque paire (query_i, key_j)
         scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
         # [B, num_heads, T, T]
- 
+
         # Masque causal : token i ne voit que les tokens 0..i (triangle inférieur)
         causal_mask = torch.tril(torch.ones(T, T, device=Q.device)).bool()
         causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, T, T]
-        scores = scores.masked_fill(~causal_mask, float("-inf"))
- 
+        scores = scores.masked_fill(~causal_mask, -1e9)
+
         # Softmax : convertit les scores en poids (somme = 1)
         attn_weights = torch.softmax(scores, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
- 
+
         # Sortie : chaque token reçoit une somme pondérée des valeurs
         return torch.matmul(attn_weights, V)
         # [B, num_heads, T, head_dim]
- 
+
     def _merge_heads(self, x: torch.Tensor, B: int, T: int) -> torch.Tensor:
         """
-        Étape 5 — Recolle les heads.
-        Inverse de _split_heads : reconstitue l'embedding complet.
- 
-            [B, num_heads, T, head_dim] → [B, T, num_heads, head_dim] → [B, T, C]
+        Recolle les heads.
+        
+        [B, num_heads, T, head_dim] -> [B, T, num_heads, head_dim] -> [B, T, C]
         """
         return x.transpose(1, 2).contiguous().view(B, T, self.embedding_dim)
- 
-    def _out_project(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Étape 6 — Projection de sortie.
-        Mélange les informations des différents heads en un seul vecteur,
-        puis applique un dropout pour régulariser.
-        """
-        return self.out_dropout(self.out_proj(x))
- 
-    def _residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
-        """
-        Étape 7 — Connexion résiduelle.
-        Additionne la sortie de l'attention au x original (avant pre-norm).
-        Permet à l'information de "court-circuiter" le bloc → gradients plus stables.
-        """
-        return residual + x
+
 
