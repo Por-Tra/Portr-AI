@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IA Generatrice - Docs & Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">IA</div>
+      <div>
+        <h1>IA Generatrice Lab</h1>
+        <p>Documentation technique complete + visualisation pedagogique pas-a-pas</p>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button id="tab-docs" class="tab active" role="tab" aria-selected="true">Partie 1 - Documentation</button>
+    <button id="tab-playground" class="tab" role="tab" aria-selected="false">Partie 2 - Algorithm Studio</button>
+  </nav>
+
+  <main>
+    <section id="panel-docs" class="panel active" role="tabpanel" aria-labelledby="tab-docs">
+      <div class="docs-layout">
+        <aside class="docs-sidebar card">
+          <h2>Index Complet</h2>
+          <label for="search-docs">Recherche</label>
+          <input id="search-docs" type="text" placeholder="class, methode, module..." />
+          <div id="module-list" class="module-list"></div>
+        </aside>
+
+        <article class="docs-content card">
+          <div class="docs-head">
+            <h2 id="symbol-title">Selectionne un symbole</h2>
+            <span id="symbol-kind" class="badge">Info</span>
+          </div>
+
+          <p id="symbol-description" class="muted">Choisis une classe ou fonction dans la colonne de gauche.</p>
+          <pre id="symbol-signature" class="code"></pre>
+          <div id="symbol-meta" class="meta-grid"></div>
+
+          <section class="method-doc-section">
+            <h3>Methodes et documentation</h3>
+            <div id="symbol-methods" class="methods"></div>
+          </section>
+        </article>
+      </div>
+    </section>
+
+    <section id="panel-playground" class="panel" role="tabpanel" aria-labelledby="tab-playground">
+      <div class="studio-layout">
+        <aside class="card studio-controls">
+          <h2>Algorithm Studio</h2>
+          <p class="muted">Mode visualizer: execute etape par etape comme algorithm-visualizer.</p>
+
+          <label for="algo-select">Algorithme</label>
+          <select id="algo-select">
+            <option value="attention">Attention (QK^T + masque + softmax)</option>
+            <option value="dataset">TextDataset (fenetre glissante)</option>
+            <option value="mlp">MLP (Linear -> GELU/ReLU -> Linear)</option>
+            <option value="gptgen">GPT Generate (boucle auto-regressive)</option>
+            <option value="bpe">Tokenizer BPE (merges progressifs)</option>
+          </select>
+
+          <div id="params-attention" class="algo-params">
+            <label for="attn-tokens">Tokens</label>
+            <input id="attn-tokens" type="text" value="je code un petit transformer" />
+            <label for="attn-heads">Heads</label>
+            <input id="attn-heads" type="range" min="1" max="8" step="1" value="4" />
+            <output id="attn-heads-out">4</output>
+            <label for="attn-temp">Temperature</label>
+            <input id="attn-temp" type="range" min="0.3" max="2.0" step="0.1" value="1.0" />
+            <output id="attn-temp-out">1.0</output>
+            <label class="checkbox-line"><input id="attn-causal" type="checkbox" checked />Masque causal</label>
+          </div>
+
+          <div id="params-dataset" class="algo-params hidden">
+            <label for="ds-tokens">Token IDs</label>
+            <input id="ds-tokens" type="text" value="10,25,33,48,77,90,12,61,44,19,70" />
+            <label for="ds-seq">seq_length</label>
+            <input id="ds-seq" type="range" min="2" max="10" step="1" value="4" />
+            <output id="ds-seq-out">4</output>
+          </div>
+
+          <div id="params-mlp" class="algo-params hidden">
+            <label for="mlp-input">Vecteur entree</label>
+            <input id="mlp-input" type="text" value="0.2,-0.1,0.8,0.3,-0.4,0.6" />
+            <label for="mlp-mult">Hidden multiplier</label>
+            <input id="mlp-mult" type="range" min="2" max="6" step="1" value="4" />
+            <output id="mlp-mult-out">4</output>
+            <label for="mlp-activation">Activation</label>
+            <select id="mlp-activation">
+              <option value="gelu" selected>GELU</option>
+              <option value="relu">ReLU</option>
+            </select>
+          </div>
+
+          <div id="params-gptgen" class="algo-params hidden">
+            <label for="gpt-seed">Seed token IDs</label>
+            <input id="gpt-seed" type="text" value="12,45,78" />
+            <label for="gpt-max-len">max_length</label>
+            <input id="gpt-max-len" type="range" min="4" max="20" step="1" value="10" />
+            <output id="gpt-max-len-out">10</output>
+            <label for="gpt-vocab">vocab_size</label>
+            <input id="gpt-vocab" type="range" min="20" max="200" step="1" value="80" />
+            <output id="gpt-vocab-out">80</output>
+            <label for="gpt-topk">top_k</label>
+            <input id="gpt-topk" type="range" min="2" max="30" step="1" value="12" />
+            <output id="gpt-topk-out">12</output>
+          </div>
+
+          <div id="params-bpe" class="algo-params hidden">
+            <label for="bpe-text">Texte</label>
+            <input id="bpe-text" type="text" value="bonjour bonsoir bonjour bonjour" />
+            <label for="bpe-merges">Nombre de merges</label>
+            <input id="bpe-merges" type="range" min="1" max="12" step="1" value="6" />
+            <output id="bpe-merges-out">6</output>
+          </div>
+
+          <div class="player-controls">
+            <button id="build-trace">Construire la trace</button>
+            <div class="row-2">
+              <button id="player-reset" class="secondary">Reset</button>
+              <button id="player-step">Step +1</button>
+            </div>
+            <div class="row-2">
+              <button id="player-play">Play</button>
+              <button id="player-pause" class="secondary">Pause</button>
+            </div>
+            <label for="player-speed">Vitesse</label>
+            <input id="player-speed" type="range" min="100" max="2000" step="100" value="700" />
+            <output id="player-speed-out">700 ms</output>
+          </div>
+
+          <div id="trace-summary" class="meta-item"></div>
+        </aside>
+
+        <section class="studio-main">
+          <article class="card">
+            <h2 id="algo-title">Pseudo-code</h2>
+            <pre id="algo-code" class="code code-large"></pre>
+          </article>
+
+          <article class="card">
+            <h2>Etat courant</h2>
+            <p id="step-label" class="muted">Construis une trace pour commencer.</p>
+            <div id="visual-area" class="visual-area"></div>
+          </article>
+
+          <article class="card">
+            <h2>Timeline</h2>
+            <div id="timeline" class="timeline"></div>
+          </article>
+
+          <article class="card">
+            <h2>Data / DB Inspector (JSONL)</h2>
+            <p class="muted">Charge un export JSONL issu de la DB via Database.export_jsonl.</p>
+            <div class="controls">
+              <label for="jsonl-file">Fichier JSONL</label>
+              <input id="jsonl-file" type="file" accept=".jsonl,.txt" />
+              <label for="jsonl-text">Ou colle du JSONL</label>
+              <textarea id="jsonl-text" rows="6" placeholder='{"text":"...","url":"https://...","title":"...","word_count":123}'></textarea>
+              <div class="row-2">
+                <button id="run-jsonl">Analyser</button>
+                <button id="demo-jsonl" class="secondary">Charger un exemple</button>
+              </div>
+            </div>
+            <div id="jsonl-stats" class="meta-grid"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>URL</th>
+                    <th>Titre</th>
+                    <th>Words</th>
+                  </tr>
+                </thead>
+                <tbody id="jsonl-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Site local autonome dans web/ - aucune modification du code existant du projet.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

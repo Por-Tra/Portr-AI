@@ -40,15 +40,8 @@ class GPT(nn.Module):
     C'est l'assemblage complet de tous les composants.
     """
     
-    def __init__(
-        self,
-        vocab_size: int,
-        seq_length: int,
-        embedding_dim: int = 256,
-        num_heads: int = 8,
-        num_blocks: int = 4,
-        dropout: float = 0.1,
-    ):
+    def __init__(self, vocab_size: int, seq_length: int, embedding_dim: int = 256,
+        num_heads: int = 8, num_blocks: int = 4, dropout: float = 0.1):
         """
         Args:
             vocab_size: Nombre de tokens uniques dans le vocabulaire
@@ -73,12 +66,9 @@ class GPT(nn.Module):
         
         # Stack de Transformer blocks
         self.blocks = nn.ModuleList([
-            TransformerBlock(
-                embedding_dim=embedding_dim,
-                num_heads=num_heads,
-                dropout=dropout,
-            )
-            for _ in range(num_blocks)
+            TransformerBlock(embedding_dim=embedding_dim,
+                num_heads=num_heads, dropout=dropout,)
+            for _ in range(num_blocks) # On empile num_blocks blocs Transformer
         ])
         
         # Final layer normalization
@@ -115,13 +105,8 @@ class GPT(nn.Module):
         
         return logits
     
-    def generate(
-        self,
-        initial_tokens: torch.Tensor,
-        max_length: int,
-        temperature: float = 1.0,
-        top_k: int = None,
-    ) -> torch.Tensor:
+    def generate(self, initial_tokens: torch.Tensor, max_length: int,
+        temperature: float = 1.0, top_k: int = None) -> torch.Tensor:
         """
         Génère des tokens en continuant à partir d'une séquence initiale.
         
@@ -165,7 +150,7 @@ class GPT(nn.Module):
                 
                 # Vérifier qu'il n'y a pas de NaN
                 if torch.isnan(probs).any() or torch.isinf(probs).any():
-                    # Fallback : utiliser argmax
+                    # Fallback
                     next_token = torch.argmax(next_logits, dim=-1, keepdim=True)
                 else:
                     # Sample le prochain token
