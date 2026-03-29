@@ -40,6 +40,7 @@ import os
 import re
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
+from array import array  # plus rapide que list pour des entiers
 
 from tqdm import tqdm
 
@@ -381,43 +382,40 @@ class Tokenizer:
     
 
     def encode_corpus(self, corpus_path: str) -> List[int]:
-        """_summary_
-        Encode un corpus complet à partir d'un fichier JSONL contenant des textes.
-
-        Args:
-            corpus_path (str): Chemin du fichier JSONL. Chaque ligne doit être un objet JSON avec une clé "text".
-
-        Returns:
-            List[int]: Liste de tokens encodés pour l'ensemble du corpus.
-        """
-        tokens: List[int] = []
         token_to_id = self.token_to_id
         unk_id = token_to_id["<UNK>"]
-
         split_text = self.split_text
         normalize_token = self.normalize_token
         tokenize_word = self.tokenize_word
-
         json_loads = json.loads
-        tokens_append = tokens.append
+
+        # Cache raw_token -> [ids]  (évite de ré-appeler _apply_merges pour chaque répétition)
+        word_cache: Dict[str, List[int]] = {}
+
+        def token_ids(raw: str) -> List[int]:
+            ids = word_cache.get(raw)
+            if ids is None:
+                ids = [token_to_id.get(t, unk_id) for t in tokenize_word(normalize_token(raw))]
+                word_cache[raw] = ids
+            return ids
+
+        # array('i') : stockage contigu en mémoire -> extend ~3× plus rapide qu'une list
+        buf = array("i")
 
         with open(corpus_path, "r", encoding="utf-8") as f:
             for i, line in enumerate(tqdm(f, desc="Encoding corpus"), start=1):
                 if LIMIT_CORPUS and i > LIMIT_CORPUS:
                     break
-                if not line.strip():
+                line = line.strip()
+                if not line:
                     continue
-
-                data = json_loads(line)
-                text = data.get("text", "")
+                text = json_loads(line).get("text", "")
                 if not text:
                     continue
+                for raw in split_text(text):
+                    buf.extend(token_ids(raw))
 
-                for raw_token in split_text(text):
-                    normalized = normalize_token(raw_token)
-                    for token in tokenize_word(normalized):
-                        tokens_append(token_to_id.get(token, unk_id))
-        return tokens
+        return buf.tolist()
 
     # ------------------------------------------------------------------
     # Méthodes utilitaires + accesseurs
