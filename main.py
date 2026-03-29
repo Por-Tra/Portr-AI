@@ -35,6 +35,7 @@ import data.dataset as ds
 import tokenizer.TokenizeData as td
 from torch.utils.data import DataLoader
 from data.dataset import TextDataset
+import model.embedding as embedding
 
 
 # Variable de configuration des données et du modèle
@@ -110,6 +111,18 @@ def main():
     print("Training model...")
 
     # Première couche du model : embedding
+    print("---"*20)
+    print("Embedding layer...")
+    print("Initializing embedding layer...")
+    embedding = embedding.Embedding(td.VOCAB_SIZE, SEQ_LENGTH, 256)
+
+    print("Testing embedding layer with a batch of data...")
+    batch_x, _ = next(iter(dataloader))
+
+    print("Batch input shape before embedding:", batch_x.shape)
+    out = embedding(batch_x)
+
+    print(out.shape)
 
 
 

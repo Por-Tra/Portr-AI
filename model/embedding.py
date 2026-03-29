@@ -14,11 +14,12 @@ Comme les modèles de langage traitent des séquences de tokens, il est importan
 """
 
 import torch
+import torch.nn as nn
 
 
 
 
-class Embedding:
+class Embedding(nn.Module):
     """
     1. Architecture réelle (simplifiée)
 
@@ -50,7 +51,7 @@ class Embedding:
     - Dropout
     """
 
-    def __init__(self, vocab_size, embedding_dim, embedding_DIM = 256):
+    def __init__(self, vocab_size, seq_length, embedding_dim=256):
         """_summary_
         Constructeur de la classe Embedding, qui initialise les paramètres nécessaires pour créer une couche d'embedding.
 
@@ -60,9 +61,25 @@ class Embedding:
             embedding_DIM (int, optional): _description_. Defaults to 256.
         """
 
-        self.EMBEDDING_DIM = embedding_DIM
+        super().__init__()
 
-    def start(self):
+        self.embedding_dim = embedding_dim
+        self.seq_length = seq_length
+
+        # matrices
+        self.token_embedding = nn.Parameter(
+            torch.randn(vocab_size, embedding_dim) * 0.02
+        )
+
+        self.position_embedding = nn.Parameter(
+            torch.randn(seq_length, embedding_dim) * 0.02
+        )
+
+        # normalisation + dropout
+        self.layer_norm = nn.LayerNorm(embedding_dim)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, tokens):
         """
         Initialise la pipeline d'embedding.
 
@@ -81,32 +98,42 @@ class Embedding:
         ↓ dropout
         [batch, seq, dim]
         """
+        token_vec = self.token_embedding(tokens)
+        pos_vec = self.positional_embedding(tokens.shape[1], tokens.device)
+
+        x = token_vec + pos_vec
+        x = self.layer_norm(x)
+        x = self.dropout(x)
+
+        return x
+    
+
+    def token_embedding(self, tokens):
+        """
+
+
+        Args:
+            tokens (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        return self.token_embedding[tokens]
+
+    def positional_embedding(self, seq_len, device):
+        """_summary_
+
+        Args:
+            seq_len (_type_): _description_
+            device (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        positions = torch.arange(seq_len, device=device)
+        return self.position_embedding[positions].unsqueeze(0)
 
 
        
 
-    def token_Embedding(self, tokens):
-        # token_id -> vecteur
-        pass
-
-    def positionnal_Embedding(self, tokens):
-        # position 0 -> vecteur
-        # position 1 -> vecteur
-        # position 2 -> vecteur
-
-        # Puis
-        # input = token_embedding + position_embedding
-        
-        pass
-
-    def addition(self):
-        pass
-
-    def layer_normalization(self):
-        pass
-
-    def dropout(self):
-        pass
-
     
-

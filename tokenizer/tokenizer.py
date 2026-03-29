@@ -25,7 +25,9 @@ Usage :
 
 Version 1.2
 
-Limiter le corpus d'entraînement aux mots pour éviter les redondances massives (ex: "the" 10 000 fois) :
+Limiter le corpus d'entraînement aux mots pour éviter les redondances massives (ex: "the" 10 000 fois)
+Optimisation de l'encodage du corpus en utilisant des fonctions locales et des structures de données plus efficaces.
+Amélioration -> 10-20it/s -> 50- +1000it/s sur un corpus de 50 000 lignes (limite actuelle)
 
 
 """
@@ -389,11 +391,32 @@ class Tokenizer:
             List[int]: Liste de tokens encodés pour l'ensemble du corpus.
         """
         tokens: List[int] = []
+        token_to_id = self.token_to_id
+        unk_id = token_to_id["<UNK>"]
+
+        split_text = self.split_text
+        normalize_token = self.normalize_token
+        tokenize_word = self.tokenize_word
+
+        json_loads = json.loads
+        tokens_append = tokens.append
+
         with open(corpus_path, "r", encoding="utf-8") as f:
-            for line in tqdm(f, desc="Encoding corpus"):
-                data = json.loads(line)
+            for i, line in enumerate(tqdm(f, desc="Encoding corpus"), start=1):
+                if LIMIT_CORPUS and i > LIMIT_CORPUS:
+                    break
+                if not line.strip():
+                    continue
+
+                data = json_loads(line)
                 text = data.get("text", "")
-                tokens.extend(self.encode(text))
+                if not text:
+                    continue
+
+                for raw_token in split_text(text):
+                    normalized = normalize_token(raw_token)
+                    for token in tokenize_word(normalized):
+                        tokens_append(token_to_id.get(token, unk_id))
         return tokens
 
     # ------------------------------------------------------------------
