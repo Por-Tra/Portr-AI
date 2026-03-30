@@ -51,7 +51,7 @@ from tqdm import tqdm
 DEFAULT_MODEL_PATH = "tokenizer/token/bpe_model.json"
 SPACE_TOKEN = "▁"
 
-LIMIT_CORPUS = 1_000
+DEFAULT_CORPUS_LIMIT = 1_000
 
 
 class Tokenizer:
@@ -90,7 +90,7 @@ class Tokenizer:
             return [self.end_of_word]
         return list(word) + [self.end_of_word]
 
-    def _build_word_freq(self, texts: Iterable[str]) -> Dict[Tuple[str, ...], int]:
+    def _build_word_freq(self, texts: Iterable[str], limit: int = 0) -> Dict[Tuple[str, ...], int]:
         """
         Construit un dictionnaire { séquence_symboles -> fréquence }.
 
@@ -100,7 +100,7 @@ class Tokenizer:
         """
         word_freq: Dict[Tuple[str, ...], int] = defaultdict(int)
         for i, text in enumerate(tqdm(texts, desc="Preparing corpus"), start=1):
-            if LIMIT_CORPUS and i > LIMIT_CORPUS:
+            if limit and i > limit:
                 break
             for token in self.split_text(text):
                 token = self.normalize_token(token)
@@ -138,7 +138,14 @@ class Tokenizer:
     # Training (version optimisée)
     # ------------------------------------------------------------------
 
-    def train(self, texts: Iterable[str], target_vocab_size: int = 5000, min_pair_freq: int = 2, verbose: bool = False) -> None:
+    def train(
+        self,
+        texts: Iterable[str],
+        target_vocab_size: int = 5000,
+        min_pair_freq: int = 2,
+        verbose: bool = False,
+        corpus_limit: int = 0,
+    ) -> None:
         """
         Apprend les fusions BPE.
 
@@ -148,7 +155,7 @@ class Tokenizer:
            heap max (lazy-deletion) -> meilleure paire en O(log P)
         """
         # ── 1. Construction du dictionnaire de fréquences ────────────────
-        word_freq = self._build_word_freq(texts)
+        word_freq = self._build_word_freq(texts, limit=corpus_limit)
 
         # ── 2. Vocabulaire initial (caractères uniques) ───────────────────
         self.vocab = set(self.special_tokens)
@@ -400,14 +407,11 @@ class Tokenizer:
 
         Args:
             corpus_path: Chemin vers le fichier JSONL.
+            limit: limite de lignes JSONL a encoder (0 = illimite).
 
         Returns:
             Liste d'entiers (token ids).
         """
-        for i, line in enumerate(tqdm(f, desc="Encoding corpus"), start=1):
-            if limit and i > limit:
-                break
-
         token_to_id = self.token_to_id
         unk_id = token_to_id["<UNK>"]
         split_text = self.split_text
@@ -432,7 +436,7 @@ class Tokenizer:
 
         with open(corpus_path, "r", encoding="utf-8") as f:
             for i, line in enumerate(tqdm(f, desc="Encoding corpus"), start=1):
-                if LIMIT_CORPUS and i > LIMIT_CORPUS:
+                if limit and i > limit:
                     break
                 line = line.strip()
                 if not line:

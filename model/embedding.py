@@ -8,7 +8,6 @@ Pipeline :
     ↓ nn.Embedding (token)       — gradients sparse : seuls les tokens vus
     ↓ nn.Embedding (position)      dans le batch sont mis à jour
     ↓ addition
-    ↓ LayerNorm
     ↓ Dropout
     → [batch, seq, embedding_dim]
 
@@ -31,7 +30,7 @@ import torch.nn as nn
 
 class Embedding(nn.Module):
     """
-    Token + Position embedding avec LayerNorm et Dropout.
+    Token + Position embedding avec Dropout.
 
     Utilise nn.Embedding (et non nn.Parameter) pour bénéficier des
     gradients sparse : sur un vocabulaire de 250k tokens, seule une
@@ -69,21 +68,29 @@ class Embedding(nn.Module):
             persistent=False,
         )
 
-        self.layer_norm = nn.LayerNorm(embedding_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor, pos_offset: int = 0) -> torch.Tensor:
         """
         Args:
             tokens: [batch_size, seq_len] — indices des tokens
+            pos_offset: decalage de position absolue pour l'inference
+                token-par-token (KV cache).
 
         Returns:
             [batch_size, seq_len, embedding_dim]
         """
         _, seq_len = tokens.shape
+        end_pos = pos_offset + seq_len
+        if end_pos > self.seq_length:
+            raise ValueError(
+                f"Position out of range: pos_offset={pos_offset}, seq_len={seq_len}, "
+                f"max_seq_length={self.seq_length}"
+            )
 
         token_vecs = self.token_emb(tokens)                         # [B, T, D]
-        pos_vecs = self.position_emb(self.position_ids[:, :seq_len])  # [1, T, D]
+        positions = self.position_ids[:, pos_offset:end_pos]
+        pos_vecs = self.position_emb(positions)  # [1, T, D]
 
-        x = self.layer_norm(token_vecs + pos_vecs)
+        x = token_vecs + pos_vecs
         return self.dropout(x)

@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+from collections import Counter
+from functools import partial
 
 import torch
 from torch.utils.data import DataLoader
@@ -38,7 +40,8 @@ from model.gpt_model import GPT
 # -----------------------------------------------------------------------------
 # Variable de configuration des donnees et du modele
 # -----------------------------------------------------------------------------
-td.VOCAB_SIZE = 1_000  # changer ca pour ajuster la taille du vocablaire
+td.VOCAB_SIZE = 30_000  # 8k-16k minimum recommande pour du francais
+td.LIMIT_CORPUS = td.VOCAB_SIZE * 10
 
 # Variable de configuration des sequences
 SEQ_LENGTH = 128
@@ -51,9 +54,19 @@ NUM_BLOCKS = 4
 DROPOUT = 0.1
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 0.01
-EPOCHS = 6
+EPOCHS = 43
 MAX_STEPS_PER_EPOCH = 1_000  # evite un run infini sur gros dataset
 GRAD_CLIP = 1.0
+LOG_INTERVAL = 20
+WARMUP_STEPS = 1049
+LR_DECAY_FACTOR = 0.1
+USE_AMP = True
+GRAD_ACCUM_STEPS = 1
+
+# Loss config
+LOSS_IGNORE_INDEX = -100
+LABEL_SMOOTHING = 0.0
+Z_LOSS_WEIGHT = 0.0
 
 # Pipeline controls
 RUN_TOKENIZER_TRAINING = True
@@ -195,6 +208,7 @@ def _build_encoding_meta(tokenizer_model) -> dict:
         "dataset": _file_signature(DATASET_JSONL_PATH),
         "tokenizer_model": _file_signature(TOKENIZER_MODEL_PATH),
         "target_vocab_size": int(td.VOCAB_SIZE),
+        "corpus_limit": int(td.LIMIT_CORPUS),
         "tokenizer_vocab_size": int(len(tokenizer_model.get_token_to_id())),
         "seq_length": int(SEQ_LENGTH),
     }
@@ -256,9 +270,87 @@ def _get_or_encode_tokens(tokenizer_model) -> list[int]:
             )
 
     print("[main] encodage du corpus (calcul lourd)...")
-    tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH, limit=LIMIT_CORPUS)
+    tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH, limit=td.LIMIT_CORPUS)
     _save_token_cache(tokens, expected_meta)
     return tokens
+
+
+def _check_dataset_quality(path: str, sample_lines: int = 5000) -> bool:
+    """Check JSONL integrity and basic text quality indicators."""
+    dataset_path = Path(path)
+    if not dataset_path.exists():
+        print(f"[data-check] fichier introuvable: {path}")
+        return False
+
+    total = 0
+    parsed = 0
+    malformed_json = 0
+    missing_text = 0
+    empty_text = 0
+    short_text = 0
+    long_text = 0
+    char_counter = Counter()
+
+    with dataset_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            total += 1
+            if sample_lines and total > sample_lines:
+                break
+
+            line = line.strip()
+            if not line:
+                empty_text += 1
+                continue
+
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                malformed_json += 1
+                continue
+
+            parsed += 1
+            text = item.get("text")
+            if text is None:
+                missing_text += 1
+                continue
+            if not isinstance(text, str):
+                missing_text += 1
+                continue
+
+            t = text.strip()
+            if not t:
+                empty_text += 1
+                continue
+
+            n = len(t)
+            if n < 10:
+                short_text += 1
+            if n > 5000:
+                long_text += 1
+            char_counter.update(t)
+
+    print("[data-check] resume qualite (echantillon):")
+    print(f"[data-check] lignes lues: {total}")
+    print(f"[data-check] json valides: {parsed}")
+    print(f"[data-check] json invalides: {malformed_json}")
+    print(f"[data-check] champ text manquant/invalide: {missing_text}")
+    print(f"[data-check] textes vides: {empty_text}")
+    print(f"[data-check] textes tres courts (<10): {short_text}")
+    print(f"[data-check] textes tres longs (>5000): {long_text}")
+
+    if char_counter:
+        top_chars = char_counter.most_common(8)
+        print(f"[data-check] caracteres frequents: {top_chars}")
+
+    usable = parsed - missing_text - empty_text
+    if usable <= 0:
+        print("[data-check] aucune donnee exploitable detectee")
+        return False
+    if malformed_json > max(5, total // 20):
+        print("[data-check] trop de lignes JSON invalides")
+        return False
+
+    return True
 
 
 def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
@@ -303,16 +395,28 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
     train_cfg = TrainConfig(
         epochs=EPOCHS,
         grad_clip=GRAD_CLIP,
+        log_interval=LOG_INTERVAL,
         max_steps_per_epoch=MAX_STEPS_PER_EPOCH,
         checkpoint_dir=CHECKPOINT_DIR,
         checkpoint_name=CHECKPOINT_NAME,
+        warmup_steps=WARMUP_STEPS,
+        lr_decay_factor=LR_DECAY_FACTOR,
+        use_amp=USE_AMP,
+        grad_accum_steps=GRAD_ACCUM_STEPS,
+    )
+
+    loss_fn = partial(
+        autoregressive_cross_entropy,
+        ignore_index=LOSS_IGNORE_INDEX,
+        label_smoothing=LABEL_SMOOTHING,
+        z_loss_weight=Z_LOSS_WEIGHT,
     )
 
     history = train_model(
         model=model,
         dataloader=dataloader,
         optimizer=optimizer,
-        loss_fn=autoregressive_cross_entropy,
+        loss_fn=loss_fn,
         config=train_cfg,
     )
 
@@ -395,6 +499,10 @@ def main() -> None:
     _select_cache_mode_console()
 
     if not _validate_files():
+        return
+
+    if not _check_dataset_quality(DATASET_JSONL_PATH):
+        print("[main] dataset quality check echoue, pipeline stop")
         return
 
     # 1) Tokenization/training tokenizer model

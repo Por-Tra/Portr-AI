@@ -120,11 +120,7 @@ class GPT(nn.Module):
         self._apply_scaled_init()
 
     def _apply_scaled_init(self) -> None:
-        """_summary_
-
-        Returns:
-            _type_: _description_
-        """
+        """Applique l'init GPT-2 avec scaling sur projections residuelles."""
         # 1. Marquer les projections résiduelles
         for block in self.blocks:
             block.attention.out_proj._is_residual_proj = True
@@ -195,6 +191,10 @@ class GPT(nn.Module):
         with torch.no_grad():
             # --- Prefill ---
             input_tokens = current_tokens[:, -self.seq_length:]
+            if max_length > self.seq_length:
+                raise ValueError(
+                    f"max_length={max_length} depasse seq_length={self.seq_length}."
+                )
             x = self.embedding(input_tokens)
 
             past_kvs = []
@@ -208,10 +208,12 @@ class GPT(nn.Module):
             # Décode le premier token issu du prefill
             next_token = self._sample(next_logits, temperature, top_k)
             current_tokens = torch.cat([current_tokens, next_token], dim=1)
+            current_pos = input_tokens.shape[1]
 
             # --- Decode loop (T=1 à chaque step) ---
             while current_tokens.shape[1] < max_length:
-                x = self.embedding(next_token)  # [B, 1, D]
+                x = self.embedding(next_token, pos_offset=current_pos)  # [B, 1, D]
+                current_pos += 1
 
                 new_kvs = []
                 for block, past_kv in zip(self.blocks, past_kvs):

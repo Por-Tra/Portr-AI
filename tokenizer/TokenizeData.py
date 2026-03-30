@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 from typing import Generator
 
-from tokenizer.tokenizer import Tokenizer, DEFAULT_MODEL_PATH, LIMIT_CORPUS
+from tokenizer.tokenizer import Tokenizer, DEFAULT_MODEL_PATH
 
-VOCAB_SIZE = 500_000
+VOCAB_SIZE = 16_000
 DATASET_PATH = "data/datasets/dataset.jsonl"
 
 # surcharger le corpus pour qu'il corresponde à la taille du vocab
@@ -104,6 +104,7 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
         target_vocab_size=VOCAB_SIZE,
         min_pair_freq=2,
         verbose=True,
+        corpus_limit=LIMIT_CORPUS,
     )
 
     tok.save()
