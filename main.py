@@ -38,7 +38,7 @@ from model.gpt_model import GPT
 # -----------------------------------------------------------------------------
 # Variable de configuration des donnees et du modele
 # -----------------------------------------------------------------------------
-td.VOCAB_SIZE = 250_000  # changer ca pour ajuster la taille du vocablaire
+td.VOCAB_SIZE = 1_000  # changer ca pour ajuster la taille du vocablaire
 
 # Variable de configuration des sequences
 SEQ_LENGTH = 128
@@ -57,6 +57,11 @@ GRAD_CLIP = 1.0
 
 # Pipeline controls
 RUN_TOKENIZER_TRAINING = True
+# Tokenizer mode:
+# - "auto": charge modèle existant sinon entraine
+# - "use_existing": utilise uniquement le modèle deja entrainé
+# - "retrain": force le ré-entraînement
+TOKENIZER_MODE = "auto"
 DATASET_JSONL_PATH = "data/datasets/dataset.jsonl"
 CHECKPOINT_DIR = "artifacts/checkpoints"
 CHECKPOINT_NAME = "gpt_latest.pt"
@@ -78,6 +83,50 @@ INFER_TOP_K = 20
 ENABLE_INTERACTIVE_REPROMPT = True
 
 
+def _select_cache_mode_console() -> None:
+    """
+    Let the user choose cache strategy at runtime from console input.
+
+    - use_precomputed: force cached encoded data
+    - recompute: force heavy encoding recomputation
+    - auto: use cache if valid, otherwise recompute
+    """
+    global ENCODING_CACHE_MODE
+
+    print("\n[main] Choix des donnees d'encodage:")
+    print("  1) Utiliser les donnees deja chargees (cache pre-calcule)")
+    print("  2) Refaire les calculs d'encodage (recompute)")
+    print("  3) Auto (cache si valide sinon recompute)")
+    print(f"[main] mode actuel: {ENCODING_CACHE_MODE}")
+
+    try:
+        choice = input("[main] Votre choix [1/2/3] (Entree = garder actuel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[main] aucun choix saisi, mode conserve")
+        return
+
+    if not choice:
+        print(f"[main] mode conserve: {ENCODING_CACHE_MODE}")
+        return
+
+    mapping = {
+        "1": "use_precomputed",
+        "2": "recompute",
+        "3": "auto",
+        "use_precomputed": "use_precomputed",
+        "recompute": "recompute",
+        "auto": "auto",
+    }
+
+    resolved = mapping.get(choice.lower())
+    if resolved is None:
+        print(f"[main] choix invalide '{choice}', mode conserve: {ENCODING_CACHE_MODE}")
+        return
+
+    ENCODING_CACHE_MODE = resolved
+    print(f"[main] mode selectionne: {ENCODING_CACHE_MODE}")
+
+
 def _validate_files() -> bool:
     if not Path(DATASET_JSONL_PATH).exists():
         print(f"[main] dataset introuvable: {DATASET_JSONL_PATH}")
@@ -85,7 +134,47 @@ def _validate_files() -> bool:
     if ENCODING_CACHE_MODE not in {"auto", "use_precomputed", "recompute"}:
         print(f"[main] ENCODING_CACHE_MODE invalide: {ENCODING_CACHE_MODE}")
         return False
+    if TOKENIZER_MODE not in {"auto", "use_existing", "retrain"}:
+        print(f"[main] TOKENIZER_MODE invalide: {TOKENIZER_MODE}")
+        return False
     return True
+
+
+def _select_tokenizer_mode_console() -> None:
+    """Console choice for tokenizer behavior (independent from encoding cache)."""
+    global TOKENIZER_MODE
+
+    print("\n[main] Choix du tokenizer:")
+    print("  1) Utiliser le tokenizer existant (pas de ré-entraînement)")
+    print("  2) Re-entraîner le tokenizer (retrain)")
+    print("  3) Auto (charger si existe, sinon entraîner)")
+    print(f"[main] mode tokenizer actuel: {TOKENIZER_MODE}")
+
+    try:
+        choice = input("[main] Votre choix tokenizer [1/2/3] (Entree = garder actuel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[main] aucun choix tokenizer saisi, mode conserve")
+        return
+
+    if not choice:
+        print(f"[main] mode tokenizer conserve: {TOKENIZER_MODE}")
+        return
+
+    mapping = {
+        "1": "use_existing",
+        "2": "retrain",
+        "3": "auto",
+        "use_existing": "use_existing",
+        "retrain": "retrain",
+        "auto": "auto",
+    }
+    resolved = mapping.get(choice.lower())
+    if resolved is None:
+        print(f"[main] choix tokenizer invalide '{choice}', mode conserve: {TOKENIZER_MODE}")
+        return
+
+    TOKENIZER_MODE = resolved
+    print(f"[main] mode tokenizer selectionne: {TOKENIZER_MODE}")
 
 
 def _file_signature(path: str) -> dict:
@@ -167,7 +256,7 @@ def _get_or_encode_tokens(tokenizer_model) -> list[int]:
             )
 
     print("[main] encodage du corpus (calcul lourd)...")
-    tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH)
+    tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH, limit=LIMIT_CORPUS)
     _save_token_cache(tokens, expected_meta)
     return tokens
 
@@ -302,13 +391,16 @@ def _interactive_reprompt_loop(model: GPT, tokenizer_model) -> None:
 def main() -> None:
     print("[main] pipeline start")
 
+    _select_tokenizer_mode_console()
+    _select_cache_mode_console()
+
     if not _validate_files():
         return
 
     # 1) Tokenization/training tokenizer model
     if RUN_TOKENIZER_TRAINING:
         print("[main] tokenization step...")
-        td.TokenizeData()
+        td.TokenizeData(mode=TOKENIZER_MODE)
 
     # 2) Load tokenizer model
     print("[main] loading tokenizer...")

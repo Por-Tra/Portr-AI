@@ -1,57 +1,111 @@
 """
 TokenizeData.py
 
-fichier qui sert au lancement et la configuration du processus de tokenisation des données textuelles brutes. 
-Il utilise la classe Tokenizer pour entraîner un modèle de tokenisation sur les données textuelles extraites par le crawler, 
-puis sauvegarde ce modèle pour une utilisation ultérieure dans le pipeline d'entraînement du modèle GPT.
+Lance et configure le processus de tokenisation des données textuelles brutes.
+Utilise la classe Tokenizer pour entraîner un modèle BPE sur les données
+extraites par le crawler, puis sauvegarde ce modèle pour le pipeline GPT.
 
+Optimisations vs version précédente :
+──────────────────────────────────────────────────────────────────────────────
+| Problème                        | Solution                                 |
+|---------------------------------|------------------------------------------|
+| Tout le dataset chargé en RAM   | Générateur streaming : une ligne lue à  |
+| (list de strings) avant train() | la fois, jamais tout en mémoire          |
+| Logique load/train incorrecte   | Si le modèle existe : on skippe          |
+| (on entraîne même si modèle ok) | l'entraînement directement               |
+| Recomptage LIMIT_CORPUS dans    | Le générateur délègue la limite à        |
+| deux endroits                   | _build_word_freq (déjà implémentée)      |
+──────────────────────────────────────────────────────────────────────────────
 """
 
+from __future__ import annotations
 
-from tokenizer.tokenizer import Tokenizer
 import json
 import sys
+from pathlib import Path
+from typing import Generator
 
-VOCAB_SIZE = 500000
+from tokenizer.tokenizer import Tokenizer, DEFAULT_MODEL_PATH, LIMIT_CORPUS
+
+VOCAB_SIZE = 500_000
+DATASET_PATH = "data/datasets/dataset.jsonl"
+
+# surcharger le corpus pour qu'il corresponde à la taille du vocab
+LIMIT_CORPUS = VOCAB_SIZE * 10  # ~10 occurrences par token en moyenne
+
 
 
 def _configure_stdout_for_unicode() -> None:
-    """Force UTF-8 output on compatible terminals to avoid cp1252 crashes."""
+    """Force UTF-8 output sur les terminaux compatibles."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
-        # Some environments do not support reconfigure; keep default stream.
         pass
 
 
-def TokenizeData():
+def _stream_texts(path: str) -> Generator[str, None, None]:
+    """
+    Générateur qui yield les textes du JSONL ligne par ligne.
+
+    Avantage : aucune liste intermédiaire en mémoire — le fichier est lu
+    de manière séquentielle. Sur un corpus de plusieurs Go, la différence
+    est critique (RAM constante vs RAM ∝ taille du corpus).
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            text = json.loads(line).get("text", "")
+            if text:
+                yield text
+
+
+def TokenizeData(mode: str = "auto") -> Tokenizer:
+    """
+    Entraîne (ou charge) un tokenizer BPE et le sauvegarde.
+
+    Modes:
+        - "auto": charge si existe, sinon entraine
+        - "use_existing": charge uniquement (erreur si absent)
+        - "retrain": entraine et ecrase le modele existant
+
+    Returns:
+        Tokenizer: instance prête à l'emploi.
+    """
     _configure_stdout_for_unicode()
 
-    # Vérifier si le fichier de modèle existe déjà pour éviter de réentraîner à chaque exécution
-    try:
-        tok = Tokenizer.load()
-        print("Tokenizer model loaded from file.")
-    except FileNotFoundError:
-        print("No existing tokenizer model found. Training a new one...")
-        tok = Tokenizer()
+    if mode not in {"auto", "use_existing", "retrain"}:
+        raise ValueError(f"Mode tokenizer invalide: {mode}")
 
-    texts = []
+    # ── Gestion du modèle existant selon mode ────────────────────────────
+    model_path = Path(DEFAULT_MODEL_PATH)
+    if model_path.exists() and mode in {"auto", "use_existing"}:
+        print(f"[TokenizeData] Modèle existant chargé depuis {model_path}")
+        return Tokenizer.load(str(model_path))
 
-    with open("data/datasets/dataset.jsonl", "r", encoding="utf-8") as f:
-        for line in f:
-            data = json.loads(line)
-            text = data.get("text", "")
-            texts.append(text)
+    if (not model_path.exists()) and mode == "use_existing":
+        raise FileNotFoundError(
+            f"Tokenizer introuvable en mode use_existing: {model_path}"
+        )
 
-    print("Training tokenizer...")
+    # ── Entraînement depuis le corpus streamé ─────────────────────────────
+    if mode == "retrain" and model_path.exists():
+        print("[TokenizeData] Mode retrain actif — ré-entraînement forcé...")
+    else:
+        print("[TokenizeData] Aucun modèle trouvé — entraînement en cours...")
 
+    if not Path(DATASET_PATH).exists():
+        raise FileNotFoundError(f"Dataset introuvable : {DATASET_PATH}")
+
+    tok = Tokenizer()
     tok.train(
-        texts,
-        target_vocab_size=VOCAB_SIZE, # plus le vocabulaire est grand, plus le modèle peut comprendre de nuances, mais cela rend aussi le modèle plus lourd et plus lent à entraîner. 100k est un bon compromis pour un modèle de taille moyenne.
-        min_pair_freq=2, # plus la fréquence minimale est élevée, moins de paires seront fusionnées, ce qui peut conduire à un vocabulaire plus grand et à une meilleure capacité de généralisation, mais aussi à un modèle plus lourd. 2 est un bon compromis pour éviter les paires très rares qui pourraient ne pas être utiles.
-        verbose=True
+        _stream_texts(DATASET_PATH),   # <- générateur, pas une liste
+        target_vocab_size=VOCAB_SIZE,
+        min_pair_freq=2,
+        verbose=True,
     )
 
     tok.save()
-
-    print("Tokenizer saved")
+    print("[TokenizeData] Modèle sauvegardé.")
+    return tok

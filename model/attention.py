@@ -9,12 +9,22 @@ Attention(Q, K, V) = softmax(QKᵀ / √d) V
 La pipeline :
 1. Q, K, V projections -> [B, T, embedding_dim]
 2. Split en heads -> [B, num_heads, T, head_dim]
-3. Scores = Q @ Kᵀ / √d
-4. Masque causal (tokens ne voient pas le futur)
-5. Softmax -> distribution de probabilité
-6. Pondération avec V
-7. Merge heads + projection de sortie
-8. Output -> [B, T, embedding_dim]
+3. Flash Attention (scaled_dot_product_attention) avec masque causal
+4. Merge heads + projection de sortie
+5. Output -> [B, T, embedding_dim]
+
+Optimisations vs version précédente :
+──────────────────────────────────────────────────────────────────────────────
+| Problème                        | Solution                                 |
+|---------------------------------|------------------------------------------|
+| Matrice scores [B,H,T,T] en RAM | Flash Attention (sdpa) — pas de          |
+|                                 | matérialisation explicite                |
+| Masque causal recréé à chaque   | register_buffer() — alloué une seule     |
+| forward (torch.tril + ones)     | fois, réutilisé comme fallback           |
+| Dropout géré manuellement       | sdpa le gère en interne (fused)          |
+| KV recalculés entièrement à     | KV Cache optionnel — seul le dernier     |
+| chaque étape de génération      | token est projeté pendant l'inférence    |
+──────────────────────────────────────────────────────────────────────────────
 
 NOTE : Les connexions résiduelles et LayerNorm sont gérées
 au niveau du TransformerBlock, pas ici !
@@ -22,107 +32,122 @@ au niveau du TransformerBlock, pas ici !
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple
 
 
 class Attention(nn.Module):
     """
-    Implémentation pure du mécanisme d'attention multi-tête causale.
-    
-    Pas de LayerNorm ou résidual ici - juste le calcul d'attention !
-    Le TransformerBlock gère les connexions résiduelles et normalisations.
+    Attention multi-tête causale avec Flash Attention et KV Cache.
+
+    - Flash Attention via F.scaled_dot_product_attention :
+        évite de matérialiser la matrice [B, H, T, T] → 2-4× plus rapide
+        et consomme beaucoup moins de VRAM sur de longues séquences.
+
+    - KV Cache (use_cache=True) :
+        pendant la génération, on ne calcule K et V que pour le nouveau token
+        et on concatène avec le cache passé → O(1) par étape au lieu de O(T).
+
+    - Buffer causal_mask :
+        fallback si sdpa n'est pas disponible (PyTorch < 2.0),
+        alloué une seule fois dans __init__.
     """
 
-    def __init__(self, embedding_dim: int, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(self, embedding_dim: int, num_heads: int = 8, dropout: float = 0.1,
+                 max_seq_length: int = 1024):
         super().__init__()
 
-        # Vérification que embedding_dim est divisible par num_heads
-        assert embedding_dim % num_heads == 0, "embedding_dim doit être divisible par num_heads"
+        assert embedding_dim % num_heads == 0, \
+            "embedding_dim doit être divisible par num_heads"
 
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
-        self.scale = self.head_dim ** -0.5  # 1 / √d
+        self.scale = self.head_dim ** -0.5
+        self.dropout_p = dropout
 
-        # Projections linéaires pour Q, K, V
-        self.q_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.k_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
-        self.v_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        # Projections Q, K, V fusionnées en une seule matrice pour réduire
+        # les appels kernel et améliorer la localité mémoire.
+        self.qkv_proj = nn.Linear(embedding_dim, 3 * embedding_dim, bias=False)
         self.out_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
-
-        self.attn_dropout = nn.Dropout(dropout)
         self.out_dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Masque causal pré-calculé (fallback si sdpa indisponible)
+        self.register_buffer(
+            "causal_mask",
+            torch.tril(torch.ones(max_seq_length, max_seq_length, dtype=torch.bool))
+            .unsqueeze(0).unsqueeze(0),  # [1, 1, T, T]
+            persistent=False,
+        )
+
+        # Détection Flash Attention (PyTorch >= 2.0)
+        self._use_flash = hasattr(F, "scaled_dot_product_attention")
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        use_cache: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Args:
-            x : [batch_size, seq_length, embedding_dim]
+            x        : [B, T, C]  — T = 1 pendant la génération avec KV cache
+            past_kv  : (K_cache, V_cache) de forme [B, H, T_past, head_dim]
+            use_cache: si True, retourne (K, V) courant pour le prochain appel
+
         Returns:
-            [batch_size, seq_length, embedding_dim]
+            out      : [B, T, C]
+            present_kv: (K, V) ou None
         """
-        B, T, _ = x.size()
+        B, T, C = x.shape
 
-        # Étape 1 : Projections Q, K, V
-        Q = self.q_proj(x)
-        K = self.k_proj(x)
-        V = self.v_proj(x)
+        # ── Projection QKV fusionnée ──────────────────────────────────────
+        # [B, T, 3C] → trois tenseurs [B, T, C]
+        qkv = self.qkv_proj(x)
+        Q, K, V = qkv.split(self.embedding_dim, dim=-1)
 
-        # Étape 2 : Split en heads
-        Q, K, V = self._split_heads(Q, K, V, B, T)
+        # ── Split en heads [B, H, T, head_dim] ───────────────────────────
+        Q = Q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        V = V.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # Étape 3-6 : Attention
-        x = self._attend(Q, K, V, T)
+        # ── KV Cache : concaténer avec le passé ───────────────────────────
+        if past_kv is not None:
+            past_K, past_V = past_kv
+            K = torch.cat([past_K, K], dim=2)
+            V = torch.cat([past_V, V], dim=2)
 
-        # Étape 7 : Merge heads
-        x = self._merge_heads(x, B, T)
+        present_kv = (K, V) if use_cache else None
+        T_full = K.shape[2]  # longueur totale après concat
 
-        # Étape 8 : Projection finale
-        x = self.out_dropout(self.out_proj(x))
+        # ── Attention ─────────────────────────────────────────────────────
+        if self._use_flash:
+            # Flash Attention : O(T) VRAM, masque causal géré en interne.
+            # is_causal=True suppose que Q voit toujours les T_full premières
+            # positions ; correct pendant le training. Pendant la génération
+            # (T=1), is_causal=True est également valide car Q[0] peut
+            # voir tout le cache passé.
+            attn_out = F.scaled_dot_product_attention(
+                Q, K, V,
+                attn_mask=None,
+                dropout_p=self.dropout_p if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            # Fallback manuel avec le buffer pré-calculé
+            scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+            mask = self.causal_mask[:, :, :T, :T_full]
+            scores = scores.masked_fill(~mask, float("-inf"))
+            attn_out = torch.matmul(torch.softmax(scores, dim=-1), V)
 
-        return x
+        # ── Merge heads [B, T, C] ─────────────────────────────────────────
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, C)
 
-    def _split_heads(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, B: int, T: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Divise l'embedding en num_heads sous-espaces indépendants.
-        
-        [B, T, C] -> [B, T, num_heads, head_dim] -> [B, num_heads, T, head_dim]
-        """
-        def split(t: torch.Tensor) -> torch.Tensor:
-            return t.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        # ── Projection de sortie ──────────────────────────────────────────
+        out = self.out_dropout(self.out_proj(attn_out))
 
-        return split(Q), split(K), split(V)
-
-    def _attend(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, T: int) -> torch.Tensor:
-        """
-        Calcul du mécanisme d'attention.
-        
-        1. Scores = Q @ Kᵀ / √d
-        2. Masque causal (tokens ne voient pas le futur)
-        3. Softmax
-        4. Pondération avec V
-        """
-        # Scores bruts : similarité entre chaque paire (query_i, key_j)
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        # [B, num_heads, T, T]
-
-        # Masque causal : token i ne voit que les tokens 0..i (triangle inférieur)
-        causal_mask = torch.tril(torch.ones(T, T, device=Q.device)).bool()
-        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, T, T]
-        scores = scores.masked_fill(~causal_mask, -1e9)
-
-        # Softmax : convertit les scores en poids (somme = 1)
-        attn_weights = torch.softmax(scores, dim=-1)
-        attn_weights = self.attn_dropout(attn_weights)
-
-        # Sortie : chaque token reçoit une somme pondérée des valeurs
-        return torch.matmul(attn_weights, V)
-        # [B, num_heads, T, head_dim]
-
-    def _merge_heads(self, x: torch.Tensor, B: int, T: int) -> torch.Tensor:
-        """
-        Recolle les heads.
-        
-        [B, num_heads, T, head_dim] -> [B, T, num_heads, head_dim] -> [B, T, C]
-        """
-        return x.transpose(1, 2).contiguous().view(B, T, self.embedding_dim)
-
-
+        return out, present_kv

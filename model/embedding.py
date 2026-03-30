@@ -1,64 +1,52 @@
 """
 Embedding.py
 
-Ce fichier contient la classe Embedding, qui est responsable de la création des embeddings pour les tokens et les positions dans le modèle de langage. 
-Les embeddings sont des représentations vectorielles denses qui capturent les relations sémantiques entre les tokens et les positions dans une séquence. 
-La classe Embedding fournit des méthodes pour générer ces embeddings à partir des tokens d'entrée, ce qui est essentiel pour l'entraînement du modèle de langage.
+Couche d'embedding pour un modèle GPT.
 
-L'embedding fonctionne en deux étapes principales :
-1. Token Embedding : Cette étape convertit les tokens d'entrée en vecteurs denses en utilisant une matrice d'embedding. 
-Chaque token est associé à un vecteur d'une dimension spécifiée (embedding_dim), qui capture les caractéristiques sémantiques du token.
-2. Positionnal Embedding : Cette étape ajoute des informations de position aux embeddings des tokens. 
-Comme les modèles de langage traitent des séquences de tokens, il est important de fournir des informations sur la position de chaque token dans la séquence.
+Pipeline :
+    tokens [batch, seq]
+    ↓ nn.Embedding (token)       — gradients sparse : seuls les tokens vus
+    ↓ nn.Embedding (position)      dans le batch sont mis à jour
+    ↓ addition
+    ↓ LayerNorm
+    ↓ Dropout
+    → [batch, seq, embedding_dim]
 
+Optimisations vs version précédente :
+──────────────────────────────────────────────────────────────────────────────
+| Problème                        | Solution                                 |
+|---------------------------------|------------------------------------------|
+| nn.Parameter pour token_emb :   | nn.Embedding → gradients sparse :        |
+| gradient dense sur tout le      | seules les lignes des tokens du batch    |
+| vocab à chaque step             | reçoivent un gradient → ×N plus rapide  |
+|                                 | sur un grand vocabulaire (250k+)         |
+| Pas de weight tying possible    | nn.Embedding expose .weight, compatible  |
+|                                 | avec le weight tying dans GPT            |
+──────────────────────────────────────────────────────────────────────────────
 """
 
 import torch
 import torch.nn as nn
 
 
-
-
 class Embedding(nn.Module):
     """
-    1. Architecture réelle (simplifiée)
+    Token + Position embedding avec LayerNorm et Dropout.
 
-    Dans un GPT, l’entrée du modèle est construite comme ça :
-
-    tokens
-    [batch, seq]
-
-    ↓ token embedding
-    [batch, seq, dim]
-
-    ↓ position embedding
-    [batch, seq, dim]
-
-    ↓ addition
-    [batch, seq, dim]
-
-    ↓ layer normalization  ← détail important
-    [batch, seq, dim]
-
-    ↓ dropout
-    [batch, seq, dim]
-
-    ↓ transformer
-
-    Les deux éléments souvent oubliés :
-
-    - LayerNorm
-    - Dropout
+    Utilise nn.Embedding (et non nn.Parameter) pour bénéficier des
+    gradients sparse : sur un vocabulaire de 250k tokens, seule une
+    infime fraction est vue par batch — mettre à jour les 250k lignes à
+    chaque step est inutile et coûteux.
     """
 
-    def __init__(self, vocab_size, seq_length, embedding_dim=256):
+    def __init__(self, vocab_size: int, seq_length: int, embedding_dim: int = 256,
+                 dropout: float = 0.1):
         """
-        Constructeur de la couche d'embedding.
-
         Args:
-            vocab_size: Nombre de tokens uniques dans le vocabulaire
-            seq_length: Longueur maximale des séquences
+            vocab_size   : Nombre de tokens uniques dans le vocabulaire
+            seq_length   : Longueur maximale des séquences
             embedding_dim: Dimension des vecteurs d'embedding
+            dropout      : Taux de dropout
         """
         super().__init__()
 
@@ -66,48 +54,36 @@ class Embedding(nn.Module):
         self.seq_length = seq_length
         self.vocab_size = vocab_size
 
-        # matrices
-        self.token_emb = nn.Parameter(
-            torch.randn(vocab_size, embedding_dim) * 0.02
+        # nn.Embedding → gradients sparse, compatible weight tying
+        self.token_emb = nn.Embedding(vocab_size, embedding_dim)
+        self.position_emb = nn.Embedding(seq_length, embedding_dim)
+
+        # Initialisation identique à GPT-2
+        nn.init.normal_(self.token_emb.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.position_emb.weight, mean=0.0, std=0.02)
+
+        # Position ids pré-calculés (évite un arange à chaque forward)
+        self.register_buffer(
+            "position_ids",
+            torch.arange(seq_length).unsqueeze(0),  # [1, seq_length]
+            persistent=False,
         )
 
-        self.position_emb = nn.Parameter(
-            torch.randn(seq_length, embedding_dim) * 0.02
-        )
-
-        # normalisation + dropout
         self.layer_norm = nn.LayerNorm(embedding_dim)
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, tokens):
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         """
-        Pipeline complet d'embedding.
-
         Args:
-            tokens: [batch_size, seq_length] - indices des tokens
+            tokens: [batch_size, seq_len] — indices des tokens
 
         Returns:
-            [batch_size, seq_length, embedding_dim]
+            [batch_size, seq_len, embedding_dim]
         """
-        batch_size, seq_len = tokens.shape
-        
-        # Token embedding
-        token_vecs = self.token_emb[tokens]  # [batch_size, seq_len, embedding_dim]
-        
-        # Position embedding
-        pos_vecs = self.position_emb[:seq_len]  # [seq_len, embedding_dim]
-        pos_vecs = pos_vecs.unsqueeze(0)  # [1, seq_len, embedding_dim]
-        
-        # Addition
-        x = token_vecs + pos_vecs
-        
-        # LayerNorm + Dropout
-        x = self.layer_norm(x)
-        x = self.dropout(x)
+        _, seq_len = tokens.shape
 
-        return x
+        token_vecs = self.token_emb(tokens)                         # [B, T, D]
+        pos_vecs = self.position_emb(self.position_ids[:, :seq_len])  # [1, T, D]
 
-
-       
-
-    
+        x = self.layer_norm(token_vecs + pos_vecs)
+        return self.dropout(x)
