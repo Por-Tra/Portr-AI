@@ -40,7 +40,14 @@ class TextDataset(Dataset):
         x = self.tokens[idx:idx+self.seq_length]
         y = self.tokens[idx+1:idx+self.seq_length+1]
 
-        # return torch.tensor(x), torch.tensor(y)
+        # Si tokens est deja un Tensor (y compris memory-mapped), evite
+        # une conversion Python intermediaire qui coute en RAM.
+        if isinstance(x, torch.Tensor) and isinstance(y, torch.Tensor):
+            if x.dtype != torch.long:
+                x = x.to(torch.long)
+                y = y.to(torch.long)
+            return x, y
+
         return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
 
 

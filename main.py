@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+from array import array
 from collections import Counter
 from functools import partial
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 
 import tokenizer.TokenizeData as td
 from data.dataset import TextDataset
@@ -45,7 +46,11 @@ td.LIMIT_CORPUS = td.VOCAB_SIZE * 10
 
 # Variable de configuration des sequences
 SEQ_LENGTH = 128
-BATCH_SIZE = 32
+BATCH_SIZE = 8
+LOW_RAM_MODE = True
+MAX_TOKENS_FOR_TRAIN = 500_000
+DATALOADER_NUM_WORKERS = 0
+DATALOADER_PIN_MEMORY = False
 
 # Training config
 EMBEDDING_DIM = 256
@@ -62,6 +67,8 @@ WARMUP_STEPS = 1049
 LR_DECAY_FACTOR = 0.1
 USE_AMP = True
 GRAD_ACCUM_STEPS = 1
+RESUME_FROM_CHECKPOINT = True
+CHECKPOINT_EVERY_STEPS = 200
 
 # Loss config
 LOSS_IGNORE_INDEX = -100
@@ -218,17 +225,24 @@ def _save_token_cache(tokens: list[int], meta: dict) -> None:
     cache_path = Path(ENCODING_CACHE_PATH)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Stockage binaire compact (4 octets par token) pour limiter la RAM
+    # au chargement via torch.from_file (memory-mapped).
+    bin_path = cache_path.with_suffix(".bin")
+    with bin_path.open("wb") as f:
+        array("I", (int(t) for t in tokens)).tofile(f)
+
     payload = {
         "meta": meta,
         "token_count": len(tokens),
-        "tokens": tokens,
+        "dtype": "uint32",
+        "bin_path": str(bin_path),
     }
     with cache_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f)
-    print(f"[main] cache ecrit: {cache_path} ({len(tokens)} tokens)")
+    print(f"[main] cache ecrit: {cache_path} + {bin_path} ({len(tokens)} tokens)")
 
 
-def _load_token_cache(expected_meta: dict) -> list[int] | None:
+def _load_token_cache(expected_meta: dict) -> torch.Tensor | None:
     cache_path = Path(ENCODING_CACHE_PATH)
     if not cache_path.exists():
         return None
@@ -240,21 +254,35 @@ def _load_token_cache(expected_meta: dict) -> list[int] | None:
         return None
 
     meta = payload.get("meta")
-    tokens = payload.get("tokens")
-    if not isinstance(meta, dict) or not isinstance(tokens, list):
+    token_count = payload.get("token_count")
+    bin_path_raw = payload.get("bin_path")
+    if not isinstance(meta, dict):
+        return None
+    if not isinstance(token_count, int) or token_count <= 0:
+        return None
+    if not isinstance(bin_path_raw, str) or not bin_path_raw:
         return None
 
     if meta != expected_meta:
         return None
 
-    # Defensive conversion for JSON numbers
-    try:
-        return [int(x) for x in tokens]
-    except (TypeError, ValueError):
+    bin_path = Path(bin_path_raw)
+    if not bin_path.exists():
         return None
 
+    expected_bytes = token_count * 4
+    if bin_path.stat().st_size != expected_bytes:
+        return None
 
-def _get_or_encode_tokens(tokenizer_model) -> list[int]:
+    return torch.from_file(
+        str(bin_path),
+        shared=False,
+        size=token_count,
+        dtype=torch.int32,
+    )
+
+
+def _get_or_encode_tokens(tokenizer_model) -> torch.Tensor | list[int]:
     expected_meta = _build_encoding_meta(tokenizer_model)
 
     if ENCODING_CACHE_MODE in {"auto", "use_precomputed"}:
@@ -264,15 +292,22 @@ def _get_or_encode_tokens(tokenizer_model) -> list[int]:
             return cached_tokens
 
         if ENCODING_CACHE_MODE == "use_precomputed":
-            raise RuntimeError(
-                "Mode use_precomputed actif, mais aucun cache valide n'a ete trouve. "
-                "Passe ENCODING_CACHE_MODE='auto' ou 'recompute'."
+            print(
+                "[main] WARNING: mode use_precomputed actif, mais aucun cache valide "
+                "n'a ete trouve. Fallback automatique vers recompute pour eviter l'arret."
             )
 
     print("[main] encodage du corpus (calcul lourd)...")
     tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH, limit=td.LIMIT_CORPUS)
+
+    if MAX_TOKENS_FOR_TRAIN and len(tokens) > MAX_TOKENS_FOR_TRAIN:
+        print(
+            f"[main] tokens limites pour RAM: {len(tokens)} -> {MAX_TOKENS_FOR_TRAIN}"
+        )
+        tokens = tokens[:MAX_TOKENS_FOR_TRAIN]
+
     _save_token_cache(tokens, expected_meta)
-    return tokens
+    return torch.tensor(tokens, dtype=torch.int32)
 
 
 def _check_dataset_quality(path: str, sample_lines: int = 5000) -> bool:
@@ -355,16 +390,33 @@ def _check_dataset_quality(path: str, sample_lines: int = 5000) -> bool:
 
 def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
     tokens = _get_or_encode_tokens(tokenizer_model)
-    print(f"[main] nb tokens encodes: {len(tokens)}")
+    n_tokens = int(tokens.numel()) if isinstance(tokens, torch.Tensor) else len(tokens)
+    print(f"[main] nb tokens encodes: {n_tokens}")
 
-    if len(tokens) <= SEQ_LENGTH:
+    if n_tokens <= SEQ_LENGTH:
         raise ValueError(
             f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. "
-            f"tokens={len(tokens)}"
+            f"tokens={n_tokens}"
         )
 
     dataset = TextDataset(tokens, SEQ_LENGTH)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    if LOW_RAM_MODE:
+        sampler = RandomSampler(dataset, replacement=True, num_samples=len(dataset))
+        dataloader = DataLoader(
+            dataset,
+            batch_size=BATCH_SIZE,
+            sampler=sampler,
+            num_workers=DATALOADER_NUM_WORKERS,
+            pin_memory=DATALOADER_PIN_MEMORY,
+        )
+    else:
+        dataloader = DataLoader(
+            dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=DATALOADER_NUM_WORKERS,
+            pin_memory=DATALOADER_PIN_MEMORY,
+        )
 
     print(f"[main] dataset size: {len(dataset)}")
     batch_x, batch_y = next(iter(dataloader))
@@ -399,6 +451,8 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
         max_steps_per_epoch=MAX_STEPS_PER_EPOCH,
         checkpoint_dir=CHECKPOINT_DIR,
         checkpoint_name=CHECKPOINT_NAME,
+        resume_from_checkpoint=RESUME_FROM_CHECKPOINT,
+        checkpoint_every_steps=CHECKPOINT_EVERY_STEPS,
         warmup_steps=WARMUP_STEPS,
         lr_decay_factor=LR_DECAY_FACTOR,
         use_amp=USE_AMP,

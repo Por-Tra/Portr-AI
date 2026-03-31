@@ -48,3 +48,56 @@ Optimisation (AdamW)
 Entraînement
 Génération de texte
 Scaling et optimisation
+
+
+---
+
+[train] checkpoint saved: artifacts\checkpoints\gpt_latest.pt
+[main] final loss: 0.8037 | perplexity: 2.23
+[train] checkpoint saved: artifacts\checkpoints\gpt_latest.pt
+[main] final loss: 0.8037 | perplexity: 2.23
+[main] checkpoint path: artifacts\checkpoints\gpt_latest.pt
+[main] inference done
+[main] generated token count: 46
+[main] generated text:
+bon<UNK> je <UNK> <UNK> <UNK>, <UNK>,, <UNK> pour <UNK>, <UNK>, :, <UNK> <UNK> <UNK> +,,,, +, <UNK>,    
+
+[main] mode reprompt actif
+[main] Tape un prompt puis Entrer.
+[main] Commandes: ':quit' pour sortir, ':help' pour aide.
+prompt> salut
+[reprompt] tokens: 42
+[reprompt] text:
+salut <UNK> en<UNK> <UNK> <UNK> de, enen<UNK> en<UNK> au, pourpour en<UNK> en<UNK> en<UNK> en<UNK> en<UNK>
+
+prompt> hitler
+[reprompt] tokens: 43
+[reprompt] text:
+hitler en sur en, à, <UNK>-<UNK> ou ou, | ::::::pour ») sur ::::pour
+
+prompt> israel
+[reprompt] tokens: 42
+[reprompt] text:
+israel :1B.com) (ser tent ((BuyB.édi<UNK> 4] (rément ali ») is 468.com
+
+prompt> hello
+[reprompt] tokens: 42
+[reprompt] text:
+h<UNK> à, ou ::à, | :in, à <UNK>, ou ou, ou (:::(), ()
+
+prompt> tu connais le principe du caca
+[reprompt] tokens: 53
+[reprompt] text:
+tu connais le <UNK> du caca es <UNK> <UNK> as as es <UNK> sois <UNK> <UNK> as es <UNK> as as as as <UNK> <UNK>
+
+prompt> bonjour
+[reprompt] tokens: 42
+[reprompt] text:
+bon<UNK> <UNK>. <UNK>, <UNK>,,, <UNK> <UNK> <UNK>. <UNK> <UNK>. :, <UNK> <UNK>, <UNK>, <UNK>, <UNK>     
+
+prompt> que pense tu
+[reprompt] tokens: 45
+[reprompt] text:
+que <UNK> tu les la leslltulllelellel’on<UNK> llales llel’<UNK>lllelletules lll
+
+prompt>

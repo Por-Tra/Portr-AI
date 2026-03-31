@@ -21,6 +21,8 @@ class TrainConfig:
     max_steps_per_epoch: int | None = None
     checkpoint_dir: str = "artifacts/checkpoints"
     checkpoint_name: str = "gpt_latest.pt"
+    resume_from_checkpoint: bool = True
+    checkpoint_every_steps: int = 200
 
     # ── Scheduler ────────────────────────────────────────────────────
     warmup_steps: int = 100          # steps de montée progressive du LR
@@ -68,6 +70,7 @@ def save_checkpoint(
     step: int,
     avg_loss: float,
     checkpoint_path: Path,
+    epoch_losses: list[float] | None = None,
 ) -> None:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -78,7 +81,41 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
     }
+    if epoch_losses is not None:
+        payload["epoch_losses"] = list(epoch_losses)
     torch.save(payload, checkpoint_path)
+
+
+def load_checkpoint_if_available(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler,
+    checkpoint_path: Path,
+    resume: bool,
+) -> tuple[int, int, list[float]]:
+    """
+    Charge un checkpoint si disponible.
+
+    Returns:
+        start_epoch, global_step, epoch_losses
+    """
+    if not resume or not checkpoint_path.exists():
+        return 0, 0, []
+
+    payload = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(payload["model_state_dict"])
+    optimizer.load_state_dict(payload["optimizer_state_dict"])
+    scheduler.load_state_dict(payload["scheduler_state_dict"])
+
+    start_epoch = int(payload.get("epoch", 0))
+    global_step = int(payload.get("step", 0))
+    epoch_losses = [float(v) for v in payload.get("epoch_losses", [])]
+
+    print(
+        f"[train] resume checkpoint: epoch={start_epoch} "
+        f"step={global_step} path={checkpoint_path}"
+    )
+    return start_epoch, global_step, epoch_losses
 
 
 def train_model(
@@ -121,9 +158,16 @@ def train_model(
         "device": str(device),
     }
 
-    global_step = 0
+    start_epoch, global_step, restored_epoch_losses = load_checkpoint_if_available(
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        checkpoint_path=ckpt_path,
+        resume=config.resume_from_checkpoint,
+    )
+    history["epoch_losses"].extend(restored_epoch_losses)
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         running_loss = 0.0
         steps = 0
         start_t = time.time()
@@ -165,6 +209,23 @@ def train_model(
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
+                if config.checkpoint_every_steps > 0 and global_step % config.checkpoint_every_steps == 0:
+                    avg_running = running_loss / max(steps, 1)
+                    save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        epoch=epoch,
+                        step=global_step,
+                        avg_loss=avg_running,
+                        checkpoint_path=ckpt_path,
+                        epoch_losses=history["epoch_losses"],
+                    )
+                    print(
+                        f"[train] periodic checkpoint saved "
+                        f"(step={global_step}): {ckpt_path}"
+                    )
+
             # loss réelle (× grad_accum pour annuler la division)
             loss_item = float(loss.item()) * config.grad_accum_steps
             running_loss += loss_item
@@ -197,6 +258,7 @@ def train_model(
             step=global_step,
             avg_loss=avg_loss,
             checkpoint_path=ckpt_path,
+            epoch_losses=history["epoch_losses"],
         )
         print(f"[train] checkpoint saved: {ckpt_path}")
 
