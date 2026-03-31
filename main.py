@@ -27,7 +27,7 @@ from data.dataset import TextDataset
 from training.loss import autoregressive_cross_entropy, perplexity_from_loss
 from training.optimizer import create_adamw_optimizer
 from training.train import TrainConfig, train_model
-from inference.generate import generate_from_prompt
+from inference.generate import generate_from_prompt, load_model_from_final_state
 
 
 # Make model directory importable (gpt_model imports local files inside model/).
@@ -87,6 +87,9 @@ TOKENIZER_MODE = "auto"
 DATASET_JSONL_PATH = "data/datasets/dataset.jsonl"
 CHECKPOINT_DIR = "artifacts/checkpoints"
 CHECKPOINT_NAME = "gpt_latest.pt"
+SAVE_FINAL_MODEL_STATE = True #! Sauvegarde un artefact final du modèle pour inference réutilisable (plus léger que checkpoint complet)
+FINAL_MODEL_DIR = "artifacts/models"
+FINAL_MODEL_NAME = "gpt_final_state.pt"
 TOKENIZER_MODEL_PATH = "tokenizer/token/bpe_model.json"
 
 # Cache controls for heavy preprocessing
@@ -103,6 +106,7 @@ INFER_MAX_NEW_TOKENS = 40
 INFER_TEMPERATURE = 0.9
 INFER_TOP_K = 20
 ENABLE_INTERACTIVE_REPROMPT = True
+INFERENCE_ONLY_FROM_FINAL_MODEL = False
 
 
 def _select_cache_mode_console() -> None:
@@ -455,6 +459,9 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
         checkpoint_name=CHECKPOINT_NAME,
         resume_from_checkpoint=RESUME_FROM_CHECKPOINT,
         checkpoint_every_steps=CHECKPOINT_EVERY_STEPS,
+        save_final_model_state=SAVE_FINAL_MODEL_STATE,
+        final_model_dir=FINAL_MODEL_DIR,
+        final_model_name=FINAL_MODEL_NAME,
         warmup_steps=WARMUP_STEPS,
         lr_decay_factor=LR_DECAY_FACTOR,
         use_amp=USE_AMP,
@@ -503,6 +510,31 @@ def _run_inference(model: GPT, tokenizer_model) -> None:
     print("[main] inference done")
     print(f"[main] generated token count: {len(token_ids)}")
     print(f"[main] generated text:\n{text}")
+
+
+def _load_model_for_inference_from_artifact(tokenizer_model, final_model_path: str):
+    """Charge un modele GPT final pour inference sans repasser par training.
+
+    Args:
+        tokenizer_model: Tokenizer deja charge.
+        final_model_path (str): Chemin du modele final sauvegarde.
+
+    Returns:
+        GPT | None: Modele charge si disponible, sinon None.
+    """
+    model_path = Path(final_model_path)
+    if not model_path.exists():
+        print(f"[main] final model not found: {model_path}")
+        return None
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model, _payload = load_model_from_final_state(
+        final_model_path=model_path,
+        tokenizer=tokenizer_model,
+        device=device,
+    )
+    print(f"[main] final model loaded for inference: {model_path}")
+    return model
 
 
 def _interactive_reprompt_loop(model: GPT, tokenizer_model) -> None:
@@ -577,6 +609,18 @@ def main() -> None:
         return
 
     # 3) Build dataloader from encoded corpus
+    if INFERENCE_ONLY_FROM_FINAL_MODEL:
+        final_model_path = str(Path(FINAL_MODEL_DIR) / FINAL_MODEL_NAME)
+        model = _load_model_for_inference_from_artifact(tokenizer_model, final_model_path)
+        if model is None:
+            print("[main] impossible de charger le modele final, pipeline stop")
+            return
+
+        _run_inference(model, tokenizer_model)
+        _interactive_reprompt_loop(model, tokenizer_model)
+        print("[main] pipeline complete (inference-only mode)")
+        return
+
     dataloader, _num_tokens = _build_dataloader(tokenizer_model)
 
     # 4) Train GPT
@@ -584,7 +628,13 @@ def main() -> None:
 
     # 5) Checkpoint info
     checkpoint_path = history.get("checkpoint_path")
+    final_model_path = history.get("final_model_path")
     print(f"[main] checkpoint path: {checkpoint_path}")
+    print(f"[main] final model path: {final_model_path}")
+
+    reloaded_model = _load_model_for_inference_from_artifact(tokenizer_model, final_model_path)
+    if reloaded_model is not None:
+        model = reloaded_model
 
     # 6) Inference test
     _run_inference(model, tokenizer_model)

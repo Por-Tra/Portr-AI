@@ -17,12 +17,53 @@ MODEL_DIR = ROOT_DIR / "model"
 if str(MODEL_DIR) not in sys.path:
 	sys.path.insert(0, str(MODEL_DIR))
 
+from model.gpt_model import GPT
+
 
 def load_model_checkpoint(model: torch.nn.Module, checkpoint_path: str | Path, map_location: str = "cpu") -> dict:
 	"""Load model weights from a saved checkpoint payload."""
 	payload = torch.load(checkpoint_path, map_location=map_location)
 	model.load_state_dict(payload["model_state_dict"])
 	return payload
+
+
+def load_model_from_final_state(
+	final_model_path: str | Path,
+	tokenizer,
+	device: str = "cpu",
+) -> tuple[torch.nn.Module, dict]:
+	"""Rebuild and load a GPT model from final inference artifact.
+
+	Args:
+		final_model_path: Path to final model artifact (.pt).
+		tokenizer: Loaded tokenizer object.
+		device: Target runtime device.
+
+	Returns:
+		Tuple[model, payload]: Loaded model in eval mode and raw artifact payload.
+	"""
+	payload = torch.load(final_model_path, map_location="cpu")
+	hparams = payload.get("model_hparams") or {}
+
+	vocab_size = int(hparams.get("vocab_size") or len(tokenizer.get_token_to_id()))
+	seq_length = int(hparams.get("seq_length") or 128)
+	embedding_dim = int(hparams.get("embedding_dim") or 256)
+	num_heads = int(hparams.get("num_heads") or 8)
+	num_blocks = int(hparams.get("num_blocks") or 4)
+	dropout = float(hparams.get("dropout") or 0.1)
+
+	model = GPT(
+		vocab_size=vocab_size,
+		seq_length=seq_length,
+		embedding_dim=embedding_dim,
+		num_heads=num_heads,
+		num_blocks=num_blocks,
+		dropout=dropout,
+	)
+	model.load_state_dict(payload["model_state_dict"])
+	model.to(device)
+	model.eval()
+	return model, payload
 
 
 def decode_token_ids(token_ids: list[int], tokenizer) -> str:
