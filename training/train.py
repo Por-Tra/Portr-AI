@@ -23,6 +23,8 @@ class TrainConfig:
     checkpoint_name: str = "gpt_latest.pt"
     resume_from_checkpoint: bool = True
     checkpoint_every_steps: int = 200
+    max_cpu_threads: int | None = None
+    max_cpu_interop_threads: int | None = None
 
     # ── Scheduler ────────────────────────────────────────────────────
     warmup_steps: int = 100          # steps de montée progressive du LR
@@ -126,6 +128,22 @@ def train_model(
     config: TrainConfig,
 ) -> dict:
     device = resolve_device(config.device)
+
+    # Limite optionnelle des threads CPU pour reduire l'usage processeur.
+    if config.max_cpu_threads is not None and config.max_cpu_threads > 0:
+        torch.set_num_threads(int(config.max_cpu_threads))
+    if (
+        config.max_cpu_interop_threads is not None
+        and config.max_cpu_interop_threads > 0
+    ):
+        torch.set_num_interop_threads(int(config.max_cpu_interop_threads))
+
+    if config.max_cpu_threads is not None or config.max_cpu_interop_threads is not None:
+        print(
+            "[train] cpu threads: "
+            f"intra={torch.get_num_threads()} inter={torch.get_num_interop_threads()}"
+        )
+
     model.to(device)
     model.train()
 
@@ -149,7 +167,8 @@ def train_model(
 
     # ── 2. Mixed precision (AMP) — actif seulement sur GPU ───────────
     use_amp = config.use_amp and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    amp_device = "cuda" if device.type == "cuda" else "cpu"
+    scaler = torch.amp.GradScaler(amp_device, enabled=use_amp)
 
     ckpt_path = Path(config.checkpoint_dir) / config.checkpoint_name
     history = {

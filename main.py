@@ -51,6 +51,8 @@ LOW_RAM_MODE = True
 MAX_TOKENS_FOR_TRAIN = 500_000
 DATALOADER_NUM_WORKERS = 0
 DATALOADER_PIN_MEMORY = False
+MAX_CPU_THREADS = 2
+MAX_CPU_INTEROP_THREADS = 1
 
 # Training config
 EMBEDDING_DIM = 256
@@ -457,6 +459,8 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
         lr_decay_factor=LR_DECAY_FACTOR,
         use_amp=USE_AMP,
         grad_accum_steps=GRAD_ACCUM_STEPS,
+        max_cpu_threads=MAX_CPU_THREADS,
+        max_cpu_interop_threads=MAX_CPU_INTEROP_THREADS,
     )
 
     loss_fn = partial(
