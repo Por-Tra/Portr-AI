@@ -4,7 +4,7 @@ train.py — version optimisée
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import time
 import math
@@ -14,6 +14,8 @@ import torch
 
 @dataclass
 class TrainConfig:
+    """classe utiliser pour stocker de l'information
+    """
     epochs: int = 1
     device: str = "auto"
     grad_clip: float = 1.0
@@ -26,18 +28,27 @@ class TrainConfig:
     max_cpu_threads: int | None = None
     max_cpu_interop_threads: int | None = None
 
-    # ── Scheduler ────────────────────────────────────────────────────
+    #* ── Scheduler ────────────────────────────────────────────────────
     warmup_steps: int = 100          # steps de montée progressive du LR
     lr_decay_factor: float = 0.1     # LR final = LR_initial × lr_decay_factor
 
-    # ── Mixed precision ──────────────────────────────────────────────
+    #* ── Mixed precision ──────────────────────────────────────────────
     use_amp: bool = True             # float16 sur GPU (ignoré sur CPU)
 
-    # ── Gradient accumulation ────────────────────────────────────────
+    #* ── Gradient accumulation ────────────────────────────────────────
     grad_accum_steps: int = 1        # accumule N batches avant optimizer.step()
 
 
 def resolve_device(requested: str = "auto") -> torch.device:
+    """Resout le device d'execution pour l'entrainement.
+
+    Args:
+        requested (str, optional): Device demande ("auto", "cpu", "cuda", ...).
+            Defaults to "auto".
+
+    Returns:
+        torch.device: Device PyTorch final a utiliser.
+    """
     if requested == "auto":
         if torch.cuda.is_available():
             return torch.device("cuda")
@@ -45,14 +56,17 @@ def resolve_device(requested: str = "auto") -> torch.device:
     return torch.device(requested)
 
 
-def _cosine_lr_with_warmup(
-    step: int,
-    warmup_steps: int,
-    total_steps: int,
-    min_lr_factor: float,
-) -> float:
-    """
-    Retourne le multiplicateur du LR pour le step courant.
+def _cosine_lr_with_warmup( step: int, warmup_steps: int, total_steps: int, min_lr_factor: float) -> float:
+    """Calcule le multiplicateur du learning rate avec warmup + cosine decay.
+
+    Args:
+        step (int): Step d'optimisation courant.
+        warmup_steps (int): Nombre de steps de warmup lineaire.
+        total_steps (int): Nombre total de steps d'optimisation prevus.
+        min_lr_factor (float): Facteur minimum du LR en fin de decay.
+
+    Returns:
+        float: Multiplicateur a appliquer au LR initial.
 
     Phase 1 (warmup) : montée linéaire de 0 → 1
     Phase 2 (decay)  : descente cosine de 1 → min_lr_factor
@@ -65,15 +79,23 @@ def _cosine_lr_with_warmup(
 
 
 def save_checkpoint(
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    epoch: int,
-    step: int,
-    avg_loss: float,
-    checkpoint_path: Path,
-    epoch_losses: list[float] | None = None,
-) -> None:
+    model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, epoch: int,
+    step: int, avg_loss: float, checkpoint_path: Path, epoch_losses: list[float] | None = None) -> None:
+    """Sauvegarde l'etat d'entrainement pour reprise ulterieure.
+
+    Args:
+        model (torch.nn.Module): Modele entraine.
+        optimizer (torch.optim.Optimizer): Optimizer courant.
+        scheduler: Scheduler de LR.
+        epoch (int): Epoch a sauvegarder.
+        step (int): Step global a sauvegarder.
+        avg_loss (float): Loss moyenne recente.
+        checkpoint_path (Path): Chemin du fichier checkpoint.
+        epoch_losses (list[float] | None, optional): Historique des losses par epoch.
+
+    Returns:
+        None: Cette fonction ecrit le checkpoint sur disque.
+    """
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "epoch": epoch,
@@ -89,17 +111,19 @@ def save_checkpoint(
 
 
 def load_checkpoint_if_available(
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    checkpoint_path: Path,
-    resume: bool,
-) -> tuple[int, int, list[float]]:
-    """
-    Charge un checkpoint si disponible.
+    model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, checkpoint_path: Path,
+    resume: bool,) -> tuple[int, int, list[float]]:
+    """Charge un checkpoint si disponible et autorise.
+
+    Args:
+        model (torch.nn.Module): Modele dans lequel charger les poids.
+        optimizer (torch.optim.Optimizer): Optimizer a restaurer.
+        scheduler: Scheduler a restaurer.
+        checkpoint_path (Path): Chemin du checkpoint.
+        resume (bool): Active ou non la reprise.
 
     Returns:
-        start_epoch, global_step, epoch_losses
+        tuple[int, int, list[float]]: Epoch de depart, step global, historique des losses.
     """
     if not resume or not checkpoint_path.exists():
         return 0, 0, []
@@ -120,16 +144,16 @@ def load_checkpoint_if_available(
     return start_epoch, global_step, epoch_losses
 
 
-def train_model(
-    model: torch.nn.Module,
-    dataloader,
-    optimizer: torch.optim.Optimizer,
-    loss_fn,
-    config: TrainConfig,
-) -> dict:
-    device = resolve_device(config.device)
+def _apply_cpu_thread_limits(config: TrainConfig) -> None:
+    """Applique un plafonnement optionnel des threads CPU PyTorch.
 
-    # Limite optionnelle des threads CPU pour reduire l'usage processeur.
+    Args:
+        config (TrainConfig): Configuration d'entrainement.
+
+    Returns:
+        None: Cette fonction met a jour la config runtime de PyTorch.
+    """
+    #& Limite optionnelle des threads CPU pour reduire l'usage processeur.
     if config.max_cpu_threads is not None and config.max_cpu_threads > 0:
         torch.set_num_threads(int(config.max_cpu_threads))
     if (
@@ -144,18 +168,34 @@ def train_model(
             f"intra={torch.get_num_threads()} inter={torch.get_num_interop_threads()}"
         )
 
-    model.to(device)
-    model.train()
 
-    # ── Total steps pour le scheduler ────────────────────────────────
-    steps_per_epoch = (
-        min(len(dataloader), config.max_steps_per_epoch)
-        if config.max_steps_per_epoch else len(dataloader)
-    )
-    total_steps = steps_per_epoch * config.epochs
+def _resolve_steps_per_epoch(dataloader, max_steps_per_epoch: int | None) -> int:
+    """Calcule le nombre de steps utilises par epoch.
 
-    # ── 1. Scheduler cosine + warmup ─────────────────────────────────
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
+    Args:
+        dataloader: DataLoader d'entrainement.
+        max_steps_per_epoch (int | None): Limite optionnelle par epoch.
+
+    Returns:
+        int: Nombre de steps effectifs par epoch.
+    """
+    if max_steps_per_epoch is None:
+        return len(dataloader)
+    return min(len(dataloader), max_steps_per_epoch)
+
+
+def _build_scheduler(optimizer: torch.optim.Optimizer, config: TrainConfig, total_steps: int):
+    """Construit le scheduler LR (warmup + cosine decay).
+
+    Args:
+        optimizer (torch.optim.Optimizer): Optimizer cible.
+        config (TrainConfig): Configuration d'entrainement.
+        total_steps (int): Nombre total de steps prevus.
+
+    Returns:
+        torch.optim.lr_scheduler.LambdaLR: Scheduler configure.
+    """
+    return torch.optim.lr_scheduler.LambdaLR(
         optimizer,
         lr_lambda=lambda step: _cosine_lr_with_warmup(
             step,
@@ -165,17 +205,143 @@ def train_model(
         ),
     )
 
-    # ── 2. Mixed precision (AMP) — actif seulement sur GPU ───────────
-    use_amp = config.use_amp and device.type == "cuda"
+
+def _build_grad_scaler(device: torch.device, use_amp: bool) -> torch.amp.GradScaler:
+    """Construit le scaler AMP compatible avec l'API torch.amp moderne.
+
+    Args:
+        device (torch.device): Device d'execution courant.
+        use_amp (bool): Active ou non l'AMP.
+
+    Returns:
+        torch.amp.GradScaler: Scaler configure.
+    """
     amp_device = "cuda" if device.type == "cuda" else "cpu"
-    scaler = torch.amp.GradScaler(amp_device, enabled=use_amp)
+    return torch.amp.GradScaler(amp_device, enabled=use_amp)
+
+
+def _run_forward_loss(
+    model: torch.nn.Module, loss_fn, x: torch.Tensor, y: torch.Tensor, config: TrainConfig, 
+    device: torch.device, use_amp: bool) -> torch.Tensor:
+    """Execute le forward et retourne une loss normalisee par accumulation.
+
+    Args:
+        model (torch.nn.Module): Modele GPT.
+        loss_fn: Fonction de loss autoregressive.
+        x (torch.Tensor): Batch input.
+        y (torch.Tensor): Batch target.
+        config (TrainConfig): Configuration d'entrainement.
+        device (torch.device): Device courant.
+        use_amp (bool): Active l'autocast AMP.
+
+    Returns:
+        torch.Tensor: Loss normalisee (division par grad_accum_steps).
+    """
+    #~ La division permet de conserver la meme echelle de gradient que
+    #~ sans accumulation, meme si on empile plusieurs mini-batches.
+    with torch.autocast(device_type=device.type, enabled=use_amp):
+        logits = model(x)
+        return loss_fn(logits, y) / config.grad_accum_steps
+
+
+def _optimizer_step(
+    model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, scaler: torch.amp.GradScaler,
+    grad_clip: float) -> float:
+    """Applique clip gradients + step optimizer + step scheduler.
+
+    Args:
+        model (torch.nn.Module): Modele entraine.
+        optimizer (torch.optim.Optimizer): Optimizer courant.
+        scheduler: Scheduler de learning rate.
+        scaler (torch.amp.GradScaler): Scaler AMP.
+        grad_clip (float): Valeur max de clipping, <=0 desactive.
+
+    Returns:
+        float: Norme de gradient mesuree apres unscale.
+    """
+    if grad_clip > 0:
+        scaler.unscale_(optimizer)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    else:
+        grad_norm = 0.0
+
+    scaler.step(optimizer)
+    scaler.update()
+    scheduler.step()
+    optimizer.zero_grad(set_to_none=True)
+    return float(grad_norm)
+
+
+def _maybe_save_periodic_checkpoint(config: TrainConfig, global_step: int, running_loss: float,
+    steps: int, model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler,
+    epoch: int, ckpt_path: Path, history: dict) -> None:
+    """Sauvegarde un checkpoint intermediaire selon la frequence configuree.
+
+    Args:
+        config (TrainConfig): Configuration d'entrainement.
+        global_step (int): Step global courant.
+        running_loss (float): Somme des losses courantes.
+        steps (int): Nombre de steps cumules sur l'epoch.
+        model (torch.nn.Module): Modele courant.
+        optimizer (torch.optim.Optimizer): Optimizer courant.
+        scheduler: Scheduler courant.
+        epoch (int): Epoch courante.
+        ckpt_path (Path): Chemin de checkpoint.
+        history (dict): Historique d'entrainement.
+
+    Returns:
+        None: Cette fonction ecrit sur disque si la condition est verifiee.
+    """
+    if config.checkpoint_every_steps <= 0:
+        return
+    if global_step % config.checkpoint_every_steps != 0:
+        return
+
+    avg_running = running_loss / max(steps, 1)
+    save_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        epoch=epoch,
+        step=global_step,
+        avg_loss=avg_running,
+        checkpoint_path=ckpt_path,
+        epoch_losses=history["epoch_losses"],
+    )
+    print(f"[train] periodic checkpoint saved (step={global_step}): {ckpt_path}")
+
+
+def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optimizer, loss_fn, 
+                config: TrainConfig) -> dict:
+    """Lance la boucle complete d'entrainement supervise.
+
+    Args:
+        model (torch.nn.Module): Modele a entrainer.
+        dataloader: DataLoader fournissant les batches (x, y).
+        optimizer (torch.optim.Optimizer): Optimizer principal.
+        loss_fn: Fonction de loss.
+        config (TrainConfig): Hyperparametres et options de runtime.
+
+    Returns:
+        dict: Historique d'entrainement (losses, device, chemin checkpoint).
+    """
+    device = resolve_device(config.device)
+    _apply_cpu_thread_limits(config)
+
+    model.to(device)
+    model.train()
+
+    #* Preparation scheduler / AMP / checkpoints
+    steps_per_epoch = _resolve_steps_per_epoch(dataloader, config.max_steps_per_epoch)
+    total_steps = steps_per_epoch * config.epochs
+    scheduler = _build_scheduler(optimizer, config, total_steps)
+
+    #! AMP actif seulement sur GPU dans cette implementation.
+    use_amp = config.use_amp and device.type == "cuda"
+    scaler = _build_grad_scaler(device, use_amp)
 
     ckpt_path = Path(config.checkpoint_dir) / config.checkpoint_name
-    history = {
-        "epoch_losses": [],
-        "checkpoint_path": str(ckpt_path),
-        "device": str(device),
-    }
+    history = {"epoch_losses": [],"checkpoint_path": str(ckpt_path),"device": str(device)}
 
     start_epoch, global_step, restored_epoch_losses = load_checkpoint_if_available(
         model=model,
@@ -186,9 +352,11 @@ def train_model(
     )
     history["epoch_losses"].extend(restored_epoch_losses)
 
+    #* Boucle d'entrainement principale
     for epoch in range(start_epoch, config.epochs):
         running_loss = 0.0
         steps = 0
+        grad_norm = 0.0
         start_t = time.time()
 
         optimizer.zero_grad(set_to_none=True)
@@ -200,50 +368,42 @@ def train_model(
             x = x.to(device)
             y = y.to(device)
 
-            # ── 3. Gradient accumulation : on divise la loss ──────────
-            # pour que les gradients accumulés soient équivalents à un
-            # seul batch de taille batch_size × grad_accum_steps.
+            #~ Equivalent batch size = batch_size * grad_accum_steps.
             is_last_accum = (batch_idx + 1) % config.grad_accum_steps == 0
 
-            # ── Forward en mixed precision ────────────────────────────
-            with torch.autocast(device_type=device.type, enabled=use_amp):
-                logits = model(x)
-                loss = loss_fn(logits, y) / config.grad_accum_steps
+            loss = _run_forward_loss(
+                model=model,
+                loss_fn=loss_fn,
+                x=x,
+                y=y,
+                config=config,
+                device=device,
+                use_amp=use_amp,
+            )
 
             scaler.scale(loss).backward()
 
             if is_last_accum:
-                # ── Grad clip + optimizer step ────────────────────────
-                if config.grad_clip > 0:
-                    scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), config.grad_clip
-                    )
-                else:
-                    grad_norm = 0.0
-
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()          # ← après chaque optimizer step
-                optimizer.zero_grad(set_to_none=True)
+                grad_norm = _optimizer_step(
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    grad_clip=config.grad_clip,
+                )
                 global_step += 1
-
-                if config.checkpoint_every_steps > 0 and global_step % config.checkpoint_every_steps == 0:
-                    avg_running = running_loss / max(steps, 1)
-                    save_checkpoint(
-                        model=model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        epoch=epoch,
-                        step=global_step,
-                        avg_loss=avg_running,
-                        checkpoint_path=ckpt_path,
-                        epoch_losses=history["epoch_losses"],
-                    )
-                    print(
-                        f"[train] periodic checkpoint saved "
-                        f"(step={global_step}): {ckpt_path}"
-                    )
+                _maybe_save_periodic_checkpoint(
+                    config=config,
+                    global_step=global_step,
+                    running_loss=running_loss,
+                    steps=steps,
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                    ckpt_path=ckpt_path,
+                    history=history,
+                )
 
             # loss réelle (× grad_accum pour annuler la division)
             loss_item = float(loss.item()) * config.grad_accum_steps
