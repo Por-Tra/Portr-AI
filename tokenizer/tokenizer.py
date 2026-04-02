@@ -246,11 +246,9 @@ class Tokenizer:
                     pair_to_words[pair].add(new_word)
                     heapq.heappush(heap, (-new_cnt, pair))
 
-            if verbose and len(self.merges) % 100 == 0:
-                print(
-                    f"[BPE] merges={len(self.merges)} | vocab={len(self.vocab)} "
-                    f"| best={best_pair} ({best_freq})"
-                )
+            # Afficher les merges
+            # if verbose and len(self.merges) % 100 == 0:
+                # print(f"[BPE] merges={len(self.merges)} | vocab={len(self.vocab)} | best={best_pair} ({best_freq})")
 
         pbar.close()
 
