@@ -50,3 +50,10 @@ Génération de texte
 Scaling et optimisation
 
 
+# ------------------------------------------------------------------------
+
+# Netoyage des données
+python build_clean_dataset.py
+python build_clean_dataset.py --db data/datasets/crawler.db --jsonl data/datasets/dataset.jsonl
+python build_clean_dataset.py --chunk-size 700 --chunk-overlap 80 --min-chars 180
+

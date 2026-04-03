@@ -13,17 +13,21 @@ Structure :
     ↓ Connexion résiduelle
     → sortie
 
-Optimisations vs version précédente :
+Corrections vs version précédente :
 ──────────────────────────────────────────────────────────────────────────────
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
-| Attention.forward() retournait  | Signature mise à jour pour propager      |
-| un seul tenseur — KV cache      | past_kv / use_cache jusqu'au bloc        |
-| inaccessible depuis le bloc     |                                          |
-| Double Dropout dans MLP         | Un seul Dropout après fc2 suffit ;       |
-|                                 | le dropout après fc1 (avant GELU) apporte|
-|                                 | peu et ralentit le training              |
+| MLP.__init__ initialisait fc1   | Init manuelle supprimée de MLP :         |
+| et fc2 avec std=0.02 AVANT que  | GPT._apply_scaled_init() est le seul     |
+| GPT._apply_scaled_init() ne     | responsable de l'init des projections    |
+| ré-initialise fc2 avec le bon   | résiduelles (fc2 avec std scalé,         |
+| std scalé → double init, fc2    | fc1 avec std=0.02). Ordre garanti,       |
+| recevait l'init de GPT en       | pas de collision.                        |
+| dernier mais fc1 gardait 0.02   |                                          |
 ──────────────────────────────────────────────────────────────────────────────
+
+NOTE : Les connexions résiduelles et LayerNorm sont gérées ici.
+       L'attention multi-tête est définie dans attention.py.
 """
 
 import torch
@@ -40,24 +44,26 @@ class MLP(nn.Module):
     """
     Feed-Forward Network appliqué position par position.
 
-    FFN(x) = Dropout(GELU(xW₁)W₂)
+    FFN(x) = Dropout(fc2(GELU(fc1(x))))
 
     Ratio d'expansion 4× (standard GPT) :
-        embedding_dim=256 → hidden_dim=1024 → embedding_dim=256
+        embedding_dim → 4 × embedding_dim → embedding_dim
+
+    Init : GPT._apply_scaled_init() se charge de tout après la construction
+    du modèle complet. Ne pas initialiser ici pour éviter les conflits d'ordre.
     """
 
     def __init__(self, embedding_dim: int, dropout: float = 0.1):
         super().__init__()
         hidden_dim = 4 * embedding_dim
-        self.fc1 = nn.Linear(embedding_dim, hidden_dim, bias=False)
-        self.fc2 = nn.Linear(hidden_dim, embedding_dim, bias=False)
-        self.act = nn.GELU()
+        self.fc1     = nn.Linear(embedding_dim, hidden_dim, bias=False)
+        self.fc2     = nn.Linear(hidden_dim, embedding_dim, bias=False)
+        self.act     = nn.GELU()
         self.dropout = nn.Dropout(dropout)
-
-        # Initialisation scaled — réduit la variance à l'init sur les
-        # couches de projection (technique GPT-2)
-        nn.init.normal_(self.fc1.weight, std=0.02)
-        nn.init.normal_(self.fc2.weight, std=0.02)
+        # ⚠️  Pas d'init manuelle ici.
+        # GPT._apply_scaled_init() applique :
+        #   - fc1 : std=0.02  (projection d'entrée, pas résiduelle)
+        #   - fc2 : std=0.02/√(2N)  (projection résiduelle, scaled GPT-2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.dropout(self.fc2(self.act(self.fc1(x))))
@@ -70,15 +76,22 @@ class TransformerBlock(nn.Module):
     Supporte le KV Cache pour une inférence efficace token-par-token.
     """
 
-    def __init__(self, embedding_dim: int, num_heads: int, dropout: float = 0.1,
-                 max_seq_length: int = 1024):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        dropout: float = 0.1,
+        max_seq_length: int = 1024,
+    ):
         super().__init__()
 
-        self.ln1 = nn.LayerNorm(embedding_dim)
+        self.ln1       = nn.LayerNorm(embedding_dim)
         self.attention = Attention(
-            embedding_dim, num_heads, dropout, max_seq_length=max_seq_length
+            embedding_dim,
+            num_heads,
+            dropout,
+            max_seq_length=max_seq_length,
         )
-
         self.ln2 = nn.LayerNorm(embedding_dim)
         self.mlp = MLP(embedding_dim, dropout)
 
@@ -90,15 +103,21 @@ class TransformerBlock(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Args:
-            x       : [B, T, C]
-            past_kv : KV cache du step précédent (inférence)
-            use_cache: active le KV cache
+            x        : [B, T, C]
+            past_kv  : KV cache du step précédent (inférence uniquement)
+            use_cache: si True, retourne le KV cache courant
 
         Returns:
             out       : [B, T, C]
-            present_kv: (K, V) courant si use_cache, sinon None
+            present_kv: (K, V) courant si use_cache=True, sinon None
         """
-        attn_out, present_kv = self.attention(self.ln1(x), past_kv=past_kv, use_cache=use_cache)
+        # Pre-norm + attention + résiduel
+        attn_out, present_kv = self.attention(
+            self.ln1(x), past_kv=past_kv, use_cache=use_cache
+        )
         x = x + attn_out
+
+        # Pre-norm + MLP + résiduel
         x = x + self.mlp(self.ln2(x))
+
         return x, present_kv

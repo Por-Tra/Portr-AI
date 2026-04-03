@@ -51,8 +51,8 @@ LOW_RAM_MODE = True
 MAX_TOKENS_FOR_TRAIN = 500_000
 DATALOADER_NUM_WORKERS = 0
 DATALOADER_PIN_MEMORY = False
-MAX_CPU_THREADS = 2
-MAX_CPU_INTEROP_THREADS = 1
+MAX_CPU_THREADS = 12
+MAX_CPU_INTEROP_THREADS = 6
 
 # Training config
 EMBEDDING_DIM = 256
@@ -101,7 +101,7 @@ ENCODING_CACHE_MODE = "auto"
 ENCODING_CACHE_PATH = "artifacts/cache/encoded_tokens.json"
 
 # Inference config
-INFER_PROMPT = "bonjour je suis"
+INFER_PROMPT = "bonjour je suis Lucas"
 INFER_MAX_NEW_TOKENS = 40
 INFER_TEMPERATURE = 0.9
 INFER_TOP_K = 20
@@ -231,8 +231,8 @@ def _save_token_cache(tokens: list[int], meta: dict) -> None:
     cache_path = Path(ENCODING_CACHE_PATH)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Stockage binaire compact (4 octets par token) pour limiter la RAM
-    # au chargement via torch.from_file (memory-mapped).
+    #& Stockage binaire compact (4 octets par token) pour limiter la RAM
+    #& au chargement via torch.from_file (memory-mapped).
     bin_path = cache_path.with_suffix(".bin")
     with bin_path.open("wb") as f:
         array("I", (int(t) for t in tokens)).tofile(f)
