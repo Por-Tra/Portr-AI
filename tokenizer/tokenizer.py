@@ -17,6 +17,8 @@ Complexité :
     Naïve   : O(V × N)          N = nb total tokens dans corpus
     Optimisée: O(V × W × log P) W = nb mots uniques (W << N en général)
 
+Et oui une complexité en log ça c'est beau (⌐■_■)
+
 Usage :
     python tokenizer.py
     from tokenizer.tokenizer import Tokenizer
@@ -138,14 +140,7 @@ class Tokenizer:
     # Training (version optimisée)
     # ------------------------------------------------------------------
 
-    def train(
-        self,
-        texts: Iterable[str],
-        target_vocab_size: int = 5000,
-        min_pair_freq: int = 2,
-        verbose: bool = False,
-        corpus_limit: int = 0,
-    ) -> None:
+    def train(self, texts: Iterable[str], target_vocab_size: int = 5000, min_pair_freq: int = 2, verbose: bool = False, corpus_limit: int = 0) -> None:
         """
         Apprend les fusions BPE.
 

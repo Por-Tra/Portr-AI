@@ -1,4 +1,4 @@
-
+Readme.md
 
 
 
@@ -23,8 +23,6 @@
 # Etape 3 : Tokenisation et création du dataset
 
 
-
-# ------------------------------------------------------------------------
 
 # Outils externes à l'IA Génératrice
 * Outils de web scraping : WebCrawler -> activation : python crawler.py
@@ -52,7 +50,7 @@ Scaling et optimisation
 
 # ------------------------------------------------------------------------
 
-# Netoyage des données
+# Netoyage des données pour construire un dataset propre et structuré à partir de la base de données brute collectée par le crawler.
 python build_clean_dataset.py
 python build_clean_dataset.py --db data/datasets/crawler.db --jsonl data/datasets/dataset.jsonl
 python build_clean_dataset.py --chunk-size 700 --chunk-overlap 80 --min-chars 180

@@ -13,7 +13,7 @@ CHECKLIST.md
 FINAL_SUMMARY.txt
 README_TRANSFORMER.md
 artifacts
-
+datafile.md
 
 #=========================================================
 # Ignore the .env file with environment variables

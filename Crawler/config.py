@@ -5,15 +5,7 @@ config.py
 
 CRAWLER_CONFIG = {
     "start_urls": [
-        "https://crunchyclone00.github.io/NovelNeko/index.html",
-        "http://mumm.hautetfort.com/tres_long_texte/",
-        "https://www.formations-analytics.com/20-ensembles-de-donnees-open-source-pour-lia-generative-et-agentique/",
-        "https://www.limpida.com/blog/ia-generative-data-analytics",
-        "https://www.laas.fr/documents/415/th%C3%A8se_Qualit%C3%A9_datasetsIA_g%C3%A9n%C3%A9rative.pdf",
-        "https://www.innovatiana.com/fr/craft-a-dataset/ai-training",
-        "https://www.databricks.com/fr/discover/generative-ai"
-
-
+        "https://example.com",
     ],
     "stay_on_domain": False,
     "extract_pdf": True,

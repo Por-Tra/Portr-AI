@@ -388,15 +388,3 @@ Attention Is All You Need
 GPT‑2 Paper
 
 The Illustrated Transformer
-
-------------------------------------------------------------------------
-
-# 24. Conseils
-
-Commencer par un mini modèle.
-
-Tester chaque composant séparément.
-
-Visualiser l'attention.
-
-Ne pas essayer GPT‑3 directement.

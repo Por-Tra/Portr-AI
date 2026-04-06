@@ -8,6 +8,9 @@ Pipeline principal du projet:
 4) Entrainement GPT
 5) Sauvegarde checkpoint
 6) Inference de test
+7) Mode reprompt interactif (test de plusieurs prompts sans relancer le pipeline)
+
+
 """
 
 from __future__ import annotations
@@ -42,47 +45,47 @@ from model.gpt_model import GPT
 # Variable de configuration des donnees et du modele
 # -----------------------------------------------------------------------------
 td.VOCAB_SIZE = 30_000  # 8k-16k minimum recommande pour du francais
-td.LIMIT_CORPUS = td.VOCAB_SIZE * 10
+td.LIMIT_CORPUS = td.VOCAB_SIZE * 10  #! pas de limite pour un entrainement opti
 
 # Variable de configuration des sequences
-SEQ_LENGTH = 128
+SEQ_LENGTH = 256
 BATCH_SIZE = 8
-LOW_RAM_MODE = True
-MAX_TOKENS_FOR_TRAIN = 500_000
+LOW_RAM_MODE = False #! pas de biais mais reisque de crash sur gros dataset (replacement=True dans sampler)
+MAX_TOKENS_FOR_TRAIN = None #Todo: Passer en None pour aucun limite (mais risque de RAM)
 DATALOADER_NUM_WORKERS = 0
 DATALOADER_PIN_MEMORY = False
 MAX_CPU_THREADS = 12
 MAX_CPU_INTEROP_THREADS = 6
 
-# Training config
-EMBEDDING_DIM = 256
+#* Training config
+EMBEDDING_DIM = 384
 NUM_HEADS = 8
 NUM_BLOCKS = 4
 DROPOUT = 0.1
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.01
-EPOCHS = 43
-MAX_STEPS_PER_EPOCH = 1_000  # evite un run infini sur gros dataset
+EPOCHS = 3
+MAX_STEPS_PER_EPOCH = None  #! Retirer la limite pour qu'il trouve un équilibre naturel
 GRAD_CLIP = 1.0
 LOG_INTERVAL = 20
-WARMUP_STEPS = 1049
+global WARMUP_STEPS #= 2000 #! Calculé dans la fonction _build_dataloader
 LR_DECAY_FACTOR = 0.1
 USE_AMP = True
-GRAD_ACCUM_STEPS = 1
+GRAD_ACCUM_STEPS = 4    #! était 1 — batch effectif = 8×4 = 32, plus stable
 RESUME_FROM_CHECKPOINT = True
-CHECKPOINT_EVERY_STEPS = 200
+CHECKPOINT_EVERY_STEPS = 500
 
-# Loss config
+#* Loss config
 LOSS_IGNORE_INDEX = -100
-LABEL_SMOOTHING = 0.0
-Z_LOSS_WEIGHT = 0.0
+LABEL_SMOOTHING = 0.1   #! était 0.0 — réduit l'overconfidence, meilleure généralisation
+Z_LOSS_WEIGHT = 1e-4    #! était 0.0 — stabilise les logits
 
-# Pipeline controls
+#* Pipeline controls
 RUN_TOKENIZER_TRAINING = True
-# Tokenizer mode:
-# - "auto": charge modèle existant sinon entraine
-# - "use_existing": utilise uniquement le modèle deja entrainé
-# - "retrain": force le ré-entraînement
+#& Tokenizer mode:
+#& - "auto": charge modèle existant sinon entraine
+#& - "use_existing": utilise uniquement le modèle deja entrainé
+#& - "retrain": force le ré-entraînement
 TOKENIZER_MODE = "auto"
 DATASET_JSONL_PATH = "data/datasets/dataset.jsonl"
 CHECKPOINT_DIR = "artifacts/checkpoints"
@@ -92,16 +95,16 @@ FINAL_MODEL_DIR = "artifacts/models"
 FINAL_MODEL_NAME = "gpt_final_state.pt"
 TOKENIZER_MODEL_PATH = "tokenizer/token/bpe_model.json"
 
-# Cache controls for heavy preprocessing
-# Modes:
-# - "auto": use cache when valid, otherwise recompute and refresh cache
-# - "use_precomputed": use cache only (fail if missing/invalid)
-# - "recompute": always recompute and overwrite cache
+#* Cache controls for heavy preprocessing
+#& Modes:
+#& - "auto": use cache when valid, otherwise recompute and refresh cache
+#& - "use_precomputed": use cache only (fail if missing/invalid)
+#& - "recompute": always recompute and overwrite cache
 ENCODING_CACHE_MODE = "auto"
 ENCODING_CACHE_PATH = "artifacts/cache/encoded_tokens.json"
 
 # Inference config
-INFER_PROMPT = "bonjour je suis Lucas"
+INFER_PROMPT = "bonjour je suis un LLM français nommé Portr-AI."
 INFER_MAX_NEW_TOKENS = 40
 INFER_TEMPERATURE = 0.9
 INFER_TOP_K = 20
@@ -423,6 +426,14 @@ def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
             num_workers=DATALOADER_NUM_WORKERS,
             pin_memory=DATALOADER_PIN_MEMORY,
         )
+
+    steps_per_epoch = len(dataloader)  # ou MAX_STEPS_PER_EPOCH si défini
+    total_steps = steps_per_epoch * EPOCHS
+    print(f"[main] steps/epoch={steps_per_epoch} | total_steps={total_steps} | warmup_recommandé={int(total_steps*0.02)}")
+
+    #& redéfinission du warmup_steps selon le nombre de steps calculé pour un training complet (2% du total est une règle classique)
+    global WARMUP_STEPS
+    WARMUP_STEPS = int(total_steps * 0.02)
 
     print(f"[main] dataset size: {len(dataset)}")
     batch_x, batch_y = next(iter(dataloader))

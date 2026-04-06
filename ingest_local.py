@@ -3,6 +3,7 @@
 ingest_local.py
 
 Ingestion de fichiers locaux vers la base de données du crawler.
+=> Plus rapide que le webcrawler pour les sources déjà téléchargées (exemple et conseille : Wikipédia ZIM),
 
 Formats supportés :
     .pdf   → extraction texte via pdfminer.six
