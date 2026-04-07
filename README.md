@@ -325,6 +325,7 @@ Training resumes automatically from the last checkpoint if `RESUME_FROM_CHECKPOI
 **Visualization:** training curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be visualized with TensorBoard:
 
 ![Aperçu 1](asset/courbe.png)
+![Aperçu 2](asset/courbe2.png)
 
 ### 4. Inference
 
