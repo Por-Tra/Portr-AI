@@ -9,14 +9,16 @@
 
 <br/><br/>
 
-```
+<!-- ```
 ██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
 ██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
 ██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
 ██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
 ██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
 ╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
-```
+``` -->
+
+![LOGO](asset/logo.png)
 
 ### **A French GPT-style LLM, built entirely from scratch**
 *Understanding every component — from raw corpus to text generation*
@@ -133,7 +135,7 @@ Tokens [batch, seq_length]
 │                     bpe_model.json                               │
 │                                                                  │
 │  4. DATASET         TextDataset — sliding windows                │
-│     ─────────────►  input[t:t+seq] → target[t+1:t+seq+1]        │
+│     ─────────────►  input[t:t+seq] → target[t+1:t+seq+1]         │
 │                                                                  │
 │  5. TRAINING        AdamW + cosine decay + warmup                │
 │     ─────────────►  AMP (float16), grad accumulation             │
@@ -480,7 +482,7 @@ L'objectif est pédagogique et technique : **maîtriser chaque brique** de l'arc
 
 - Python **3.10+**
 - CUDA (optionnel, fortement recommandé pour l'entraînement)
-- ~4 Go de RAM minimum, 8+ Go recommandés
+- ~6 Go de RAM minimum, 16+ Go recommandés
 
 ```bash
 git clone https://github.com/Por-tra/Portr-AI.git
