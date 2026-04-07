@@ -26,7 +26,7 @@ Corrections vs version précédente :
 | 70% des chunks finissent sans   | Même fix : chaque chunk se termine       |
 | ponctuation (coupure mid-phrase)| toujours sur '.', '!', '?' ou '…'        |
 |---------------------------------|------------------------------------------|
-| Points/virgules flottants       | RE_FLOATING_PUNCT : 'mot . mot' →        |
+| Points/virgules flottants       | RE_FLOATING_PUNCT : 'mot . mot' ->        |
 | (artefact HTML, 36% du corpus)  | 'mot. mot' — appliqué AVANT le chunking  |
 |---------------------------------|------------------------------------------|
 | NOISE_PATTERNS trop agressifs : | Suppression des patterns qui filtrent    |
@@ -35,14 +35,14 @@ Corrections vs version précédente :
 | du contenu éditorial valide     | patterns réellement bruités sont gardés. |
 |---------------------------------|------------------------------------------|
 | near-dup O(N²) : liste de fps   | LSH banding O(N) amorti : on hash        |
-| comparée 1 à 1 → des heures     | le fingerprint en B bandes, lookup en    |
+| comparée 1 à 1 -> des heures     | le fingerprint en B bandes, lookup en    |
 | sur 1M chunks                   | dict. md5 pour éviter PYTHONHASHSEED.    |
 |---------------------------------|------------------------------------------|
 | quality_score : boucles         | Remplacées par re.findall sur le sample  |
-| char par char (×2 par chunk)    | → même résultat, 5-10x plus rapide       |
+| char par char (×2 par chunk)    | -> même résultat, 5-10x plus rapide       |
 |---------------------------------|------------------------------------------|
 | 15 NOISE_PATTERNS séquentiels   | Combinés en 1 seul pattern ORed          |
-| par ligne                       | → même résultat, ~10x plus rapide        |
+| par ligne                       | -> même résultat, ~10x plus rapide        |
 |---------------------------------|------------------------------------------|
 | Overlap 80 mots = 7.8% du       | Overlap ramené à 0 par défaut (la        |
 | corpus en double, biaise        | continuité inter-chunks est gérée par    |
@@ -257,7 +257,7 @@ def quality_score(text: str, min_chars: int) -> bool:
     - pas de parenthèses vides résiduelles
 
     Implémentation : re.findall remplace les boucles char par char
-    → même résultat, 5-10x plus rapide sur des samples de 120 000 chars.
+    -> même résultat, 5-10x plus rapide sur des samples de 120 000 chars.
     """
     if not text or len(text) < min_chars:
         return False
@@ -377,8 +377,8 @@ class DedupIndex:
     """
     Déduplication à deux niveaux :
 
-    1. SHA-256 exact          → set, O(1) lookup
-    2. Near-dup par LSH banding → O(1) amorti au lieu de O(N²)
+    1. SHA-256 exact          -> set, O(1) lookup
+    2. Near-dup par LSH banding -> O(1) amorti au lieu de O(N²)
 
     Principe du banding LSH :
     ─────────────────────────
@@ -387,11 +387,11 @@ class DedupIndex:
     Si deux textes partagent au moins une bande identique, ils sont near-dups.
 
     Avec BANDS=20, ROWS=5 et Jaccard ≥ 0.8 :
-      P(détection)  ≈ 1 - (1 - 0.8^5)^20  ≈ 99.97 %   → quasi aucun faux négatif
+      P(détection)  ≈ 1 - (1 - 0.8^5)^20  ≈ 99.97 %   -> quasi aucun faux négatif
       P(faux positif) est faible grâce à MD5 (espace 2^128)
 
-    Complexité : O(BANDS) par chunk au lieu de O(N) comparaisons → O(N) amorti global.
-    Mémoire    : O(N × BANDS) entrées de dict (int → bool).
+    Complexité : O(BANDS) par chunk au lieu de O(N) comparaisons -> O(N) amorti global.
+    Mémoire    : O(N × BANDS) entrées de dict (int -> bool).
     """
 
     BANDS = 20  # nombre de bandes — augmenter améliore la précision, coûte de la mémoire
@@ -399,7 +399,7 @@ class DedupIndex:
 
     def __init__(self, near_dup_threshold: float = 0.8):
         self._exact: set[str] = set()
-        # Un dict par bande : hash_md5_int → True (présence seule suffit)
+        # Un dict par bande : hash_md5_int -> True (présence seule suffit)
         self._buckets: list[dict[int, bool]] = [
             {} for _ in range(self.BANDS)
         ]
@@ -436,7 +436,7 @@ class DedupIndex:
                 if bh in self._buckets[band_idx]:
                     return True  # near-dup détecté
 
-            # Pas de doublon → on indexe dans tous les buckets
+            # Pas de doublon -> on indexe dans tous les buckets
             for band_idx, bh in enumerate(band_hashes):
                 self._buckets[band_idx][bh] = True
 

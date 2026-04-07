@@ -78,18 +78,16 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
     if mode not in {"auto", "use_existing", "retrain"}:
         raise ValueError(f"Mode tokenizer invalide: {mode}")
 
-    # ── Gestion du modèle existant selon mode ────────────────────────────
+    # * Gestion du modèle existant selon mode *
     model_path = Path(DEFAULT_MODEL_PATH)
     if model_path.exists() and mode in {"auto", "use_existing"}:
         print(f"[TokenizeData] Modèle existant chargé depuis {model_path}")
         return Tokenizer.load(str(model_path))
 
     if (not model_path.exists()) and mode == "use_existing":
-        raise FileNotFoundError(
-            f"Tokenizer introuvable en mode use_existing: {model_path}"
-        )
+        raise FileNotFoundError(f"Tokenizer introuvable en mode use_existing: {model_path}")
 
-    # ── Entraînement depuis le corpus streamé ─────────────────────────────
+    # * Entraînement depuis le corpus streamé *
     if mode == "retrain" and model_path.exists():
         print("[TokenizeData] Mode retrain actif — ré-entraînement forcé...")
     else:
@@ -100,7 +98,7 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
 
     tok = Tokenizer()
     tok.train(
-        _stream_texts(DATASET_PATH),   # <- générateur, pas une liste
+        _stream_texts(DATASET_PATH),   #& <- générateur, pas une liste
         target_vocab_size=VOCAB_SIZE,
         min_pair_freq=2,
         verbose=True,

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 config.py
+
+Fichier de configuration du crawlerweb.
+
 """
 
 CRAWLER_CONFIG = {

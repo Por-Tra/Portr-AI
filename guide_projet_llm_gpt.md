@@ -13,8 +13,8 @@ prochain token d'une phrase.
 
 Pipeline complet :
 
-Corpus texte → Nettoyage → Tokenisation → Dataset → Embedding →
-Transformer (attention) → Entraînement → Génération de texte
+Corpus texte -> Nettoyage -> Tokenisation -> Dataset -> Embedding ->
+Transformer (attention) -> Entraînement -> Génération de texte
 
 ------------------------------------------------------------------------
 
@@ -35,17 +35,17 @@ Deep Learning - gradient - backpropagation - descente de gradient
 
 Bibliothèques recommandées :
 
-numpy → calcul matriciel
+numpy -> calcul matriciel
 
-torch → autograd → GPU → tensor operations
+torch -> autograd -> GPU -> tensor operations
 
-tokenizers (optionnel) → tokenisation rapide
+tokenizers (optionnel) -> tokenisation rapide
 
-matplotlib → visualisation
+matplotlib -> visualisation
 
-tqdm → progression entraînement
+tqdm -> progression entraînement
 
-datasets (optionnel) → charger corpus
+datasets (optionnel) -> charger corpus
 
 Important : Ne pas utiliser directement des modèles LLM pré‑entraînés.
 
@@ -96,7 +96,7 @@ Exemple :
 
 "bonjour comment ça va"
 
-→
+->
 
 \[154, 892, 45, 991\]
 

@@ -11,7 +11,7 @@ Structure :
     ↓ LayerNorm
     ↓ MLP (FeedForward)
     ↓ Connexion résiduelle
-    → sortie
+    -> sortie
 
 Corrections vs version précédente :
 ──────────────────────────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ Corrections vs version précédente :
 | et fc2 avec std=0.02 AVANT que  | GPT._apply_scaled_init() est le seul     |
 | GPT._apply_scaled_init() ne     | responsable de l'init des projections    |
 | ré-initialise fc2 avec le bon   | résiduelles (fc2 avec std scalé,         |
-| std scalé → double init, fc2    | fc1 avec std=0.02). Ordre garanti,       |
+| std scalé -> double init, fc2    | fc1 avec std=0.02). Ordre garanti,       |
 | recevait l'init de GPT en       | pas de collision.                        |
 | dernier mais fc1 gardait 0.02   |                                          |
 ──────────────────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ class MLP(nn.Module):
     FFN(x) = Dropout(fc2(GELU(fc1(x))))
 
     Ratio d'expansion 4× (standard GPT) :
-        embedding_dim → 4 × embedding_dim → embedding_dim
+        embedding_dim -> 4 × embedding_dim -> embedding_dim
 
     Init : GPT._apply_scaled_init() se charge de tout après la construction
     du modèle complet. Ne pas initialiser ici pour éviter les conflits d'ordre.

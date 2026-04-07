@@ -6,10 +6,10 @@ Ingestion de fichiers locaux vers la base de données du crawler.
 => Plus rapide que le webcrawler pour les sources déjà téléchargées (exemple et conseille : Wikipédia ZIM),
 
 Formats supportés :
-    .pdf   → extraction texte via pdfminer.six
-    .txt   → lecture UTF-8 directe
-    .md    → lecture UTF-8 directe (Markdown → texte brut)
-    .zim   → base Kiwix/Wikipédia (libzim) — itère sur tous les articles
+    .pdf   -> extraction texte via pdfminer.six
+    .txt   -> lecture UTF-8 directe
+    .md    -> lecture UTF-8 directe (Markdown -> texte brut)
+    .zim   -> base Kiwix/Wikipédia (libzim) — itère sur tous les articles
 
 Dépendances :
     pip install pdfminer.six langdetect libzim beautifulsoup4 lxml
@@ -311,7 +311,7 @@ def _iter_zim_articles(
             yield entry_index, title, content, url
 
         except Exception:
-            continue  # article corrompu ou non lisible → on passe
+            continue  # article corrompu ou non lisible -> on passe
 
     if progress_callback is not None and pending_progress:
         progress_callback(pending_progress, scanned_entries)
@@ -677,7 +677,7 @@ def _collect_files(args) -> list:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ingestion de fichiers locaux (PDF, TXT, MD, ZIM) → base crawler",
+        description="Ingestion de fichiers locaux (PDF, TXT, MD, ZIM) -> base crawler",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Exemples :\n"

@@ -18,6 +18,7 @@ Complexité :
     Optimisée: O(V × W × log P) W = nb mots uniques (W << N en général)
 
 Et oui une complexité en log ça c'est beau (⌐■_■)
+Pas moi qui ai fais l'optimisation :-D
 
 Usage :
     python tokenizer.py
@@ -71,9 +72,9 @@ class Tokenizer:
         self.token_to_id: Dict[str, int] = {}
         self.id_to_token: Dict[int, str] = {}
 
-    # ------------------------------------------------------------------
-    # Découpage et normalisation
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Découpage et normalisation
+    #* ------------------------------------------------------------------
 
     def split_text(self, text: str) -> List[str]:
         """Découpe texte en mots + ponctuation en conservant les espaces."""
@@ -82,9 +83,9 @@ class Tokenizer:
     def normalize_token(self, token: str) -> str:
         return SPACE_TOKEN if token.isspace() else token
 
-    # ------------------------------------------------------------------
-    # Préparation corpus
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Préparation corpus
+    #* ------------------------------------------------------------------
 
     def prepare_word(self, word: str) -> List[str]:
         """Convertit un mot en symboles caractères + marqueur fin de mot."""
@@ -110,9 +111,9 @@ class Tokenizer:
                 word_freq[key] += 1
         return word_freq
 
-    # ------------------------------------------------------------------
-    # Comptage de paires (helpers internes)
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Comptage de paires (helpers internes)
+    #* ------------------------------------------------------------------
 
     @staticmethod
     def _pairs_in_word(word: Tuple[str, ...]) -> List[Tuple[str, str]]:
@@ -136,9 +137,9 @@ class Tokenizer:
 
         return pair_counts, pair_to_words
 
-    # ------------------------------------------------------------------
-    # Training (version optimisée)
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Training (version optimisée)
+    #* ------------------------------------------------------------------
 
     def train(self, texts: Iterable[str], target_vocab_size: int = 5000, min_pair_freq: int = 2, verbose: bool = False, corpus_limit: int = 0) -> None:
         """
@@ -149,20 +150,20 @@ class Tokenizer:
            mise à jour incrémentale des pair_counts après chaque merge
            heap max (lazy-deletion) -> meilleure paire en O(log P)
         """
-        # ── 1. Construction du dictionnaire de fréquences ────────────────
+        # * 1. Construction du dictionnaire de fréquences *
         word_freq = self._build_word_freq(texts, limit=corpus_limit)
 
-        # ── 2. Vocabulaire initial (caractères uniques) ───────────────────
+        # * 2. Vocabulaire initial (caractères uniques) *
         self.vocab = set(self.special_tokens)
         for word in word_freq:
             self.vocab.update(word)
         self.merges = []
         self.merge_ranks = {}
 
-        # ── 3. Comptage initial de toutes les paires ──────────────────────
+        # * 3. Comptage initial de toutes les paires *
         pair_counts, pair_to_words = self._count_all_pairs(word_freq)
 
-        # ── 4. Heap max (on stocke des tuples (-fréquence, paire)) ────────
+        # * 4. Heap max (on stocke des tuples (-fréquence, paire)) *
         heap: List[Tuple[int, Tuple[str, str]]] = [
             (-cnt, pair) for pair, cnt in pair_counts.items()
         ]
@@ -172,7 +173,7 @@ class Tokenizer:
 
         while len(self.vocab) < target_vocab_size:
 
-            # ── Trouver la meilleure paire via le heap ─────────────────
+            # * Trouver la meilleure paire via le heap *
             best_pair: Optional[Tuple[str, str]] = None
             best_freq = 0
 
@@ -193,7 +194,7 @@ class Tokenizer:
                     print(f"\n[BPE] Arrêt : {reason}")
                 break
 
-            # ── Fusionner ─────────────────────────────────────────────
+            # * Fusionner *
             a, b = best_pair
             merged = a + b
             self.vocab.add(merged)
@@ -241,19 +242,20 @@ class Tokenizer:
                     pair_to_words[pair].add(new_word)
                     heapq.heappush(heap, (-new_cnt, pair))
 
+            # TODO: ASUP
             # Afficher les merges
             # if verbose and len(self.merges) % 100 == 0:
                 # print(f"[BPE] merges={len(self.merges)} | vocab={len(self.vocab)} | best={best_pair} ({best_freq})")
 
         pbar.close()
 
-        # ── Finalisation ──────────────────────────────────────────────────
+        # * Finalisation *
         self.token_to_id = {tok: i for i, tok in enumerate(sorted(self.vocab))}
         self.id_to_token = {i: tok for tok, i in self.token_to_id.items()}
 
-    # ------------------------------------------------------------------
-    # Tokenisation
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Tokenisation
+    #* ------------------------------------------------------------------
 
     def _apply_merges(self, symbols: List[str]) -> List[str]:
         """
@@ -269,7 +271,7 @@ class Tokenizer:
                 - merge_ranks.get() en accès direct (dict local)
                 - best_rank / best_idx mis à jour in-place
                 - une seule allocation pour le nouveau symbols
-                → ~2× moins d'allocations pour les mots courts/moyens
+                -> ~2× moins d'allocations pour les mots courts/moyens
         ─────────────────────────────────────────────────────────────────
 
         Args:
@@ -278,24 +280,24 @@ class Tokenizer:
         Returns:
             ex. ['the</w>'] après application des merges
         """
-        merge_ranks = self.merge_ranks  # référence locale (évite self. lookup)
+        merge_ranks = self.merge_ranks  #& référence locale (évite self. lookup)
 
         while len(symbols) >= 2:
-            best_rank = -1          # -1 = "rien trouvé"
+            best_rank = -1          #& -1 = "rien trouvé"
             best_idx  = -1
 
-            # Scan unique : on cherche la paire de plus bas rang (= priorité max)
+            #& Scan unique : on cherche la paire de plus bas rang (= priorité max)
             for i in range(len(symbols) - 1):
                 rank = merge_ranks.get((symbols[i], symbols[i + 1]))
                 if rank is not None and (best_rank == -1 or rank < best_rank):
                     best_rank = rank
                     best_idx  = i
 
-            if best_idx == -1:      # plus aucune paire connue
+            if best_idx == -1:      #& plus aucune paire connue
                 break
 
-            # Fusion : on reconstruit symbols autour de best_idx
-            # (une seule nouvelle liste, pas de liste 'pairs' intermédiaire)
+            #& Fusion : on reconstruit symbols autour de best_idx
+            #& (une seule nouvelle liste, pas de liste 'pairs' intermédiaire)
             merged = symbols[best_idx] + symbols[best_idx + 1]
             symbols = symbols[:best_idx] + [merged] + symbols[best_idx + 2:]
 
@@ -339,9 +341,9 @@ class Tokenizer:
             output.extend(self.tokenize_word(token, strip_eow=strip_eow))
         return output
 
-    # ------------------------------------------------------------------
-    # Sérialisation
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Sérialisation
+    #* ------------------------------------------------------------------
 
     def save(self, path: str = DEFAULT_MODEL_PATH) -> None:
         """Sauvegarde le modèle BPE dans un fichier JSON."""
@@ -376,9 +378,9 @@ class Tokenizer:
         tok.id_to_token = {i: t for t, i in tok.token_to_id.items()}
         return tok
 
-    # ------------------------------------------------------------------
-    # Encoding
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Encoding
+    #* ------------------------------------------------------------------
 
     def encode(self, text: str) -> List[int]:
         tokens = self.tokenize_text(text)
@@ -442,9 +444,9 @@ class Tokenizer:
 
         return buf.tolist()
 
-    # ------------------------------------------------------------------
-    # Accesseurs
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Accesseurs
+    #* ------------------------------------------------------------------
 
     def vocab_size(self) -> int:
         return len(self.vocab)

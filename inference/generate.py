@@ -8,7 +8,7 @@ Corrections vs version précédente :
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | decode_token_ids : suppression  | Les tokens terminant par </w> injectent  |
-| brute de </w> → mots concaténés | un espace après eux avant concaténation  |
+| brute de </w> -> mots concaténés | un espace après eux avant concaténation  |
 | sans espaces                    |                                          |
 | Tokens spéciaux inclus dans le  | Tokens spéciaux filtrés au décodage      |
 | texte généré (<BOS>, <PAD>...)  |                                          |
@@ -36,22 +36,14 @@ from model.gpt_model import GPT
 _SPECIAL_TOKENS = {"<PAD>", "<UNK>", "<BOS>", "<EOS>"}
 
 
-def load_model_checkpoint(
-    model: torch.nn.Module,
-    checkpoint_path: str | Path,
-    map_location: str = "cpu",
-) -> dict:
+def load_model_checkpoint(model: torch.nn.Module,checkpoint_path: str | Path,map_location: str = "cpu") -> dict:
     """Charge les poids depuis un checkpoint d'entraînement."""
     payload = torch.load(checkpoint_path, map_location=map_location, weights_only=True)
     model.load_state_dict(payload["model_state_dict"])
     return payload
 
 
-def load_model_from_final_state(
-    final_model_path: str | Path,
-    tokenizer,
-    device: str = "cpu",
-) -> tuple[torch.nn.Module, dict]:
+def load_model_from_final_state( final_model_path: str | Path, tokenizer, device: str = "cpu") -> tuple[torch.nn.Module, dict]:
     """Reconstruit et charge un modèle GPT depuis l'artefact final d'inférence.
 
     Args:

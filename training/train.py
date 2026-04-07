@@ -6,7 +6,7 @@ Corrections vs version précédente :
 | Problème (ralentissement ×2-3)  | Solution                                 |
 |---------------------------------|------------------------------------------|
 | loss.item() appelé à CHAQUE     | loss.item() déplacé dans le bloc de log  |
-| batch → synchronisation GPU→CPU | uniquement (toutes les log_interval       |
+| batch -> synchronisation GPU->CPU | uniquement (toutes les log_interval       |
 | à chaque step, pipeline CUDA    | steps). Entre les logs, la loss est       |
 | bloqué, async annulé            | accumulée comme tenseur sur GPU sans      |
 |                                 | jamais forcer de sync.                   |
@@ -16,12 +16,12 @@ Corrections vs version précédente :
 | même hors du bloc log           |                                          |
 |---------------------------------|------------------------------------------|
 | torch.save() synchrone sur le   | Checkpoint écrit dans un thread séparé   |
-| thread principal → bloque le    | via threading.Thread(daemon=True) pour   |
+| thread principal -> bloque le    | via threading.Thread(daemon=True) pour   |
 | training pendant l'I/O disque   | ne pas bloquer la boucle principale.     |
 |---------------------------------|------------------------------------------|
 | Scheduler restauré mais         | total_steps sauvegardé dans le           |
 | total_steps recalculé depuis    | checkpoint ; au resume, le scheduler     |
-| epoch 0 → LR désynchro si      | est reconstruit avec le bon total_steps  |
+| epoch 0 -> LR désynchro si      | est reconstruit avec le bon total_steps  |
 | EPOCHS change entre deux runs   | pour garder le cosine decay cohérent.    |
 ──────────────────────────────────────────────────────────────────────────────
 """
@@ -56,15 +56,15 @@ class TrainConfig:
     max_cpu_threads: int | None = None
     max_cpu_interop_threads: int | None = None
 
-    # Scheduler
+    #* Scheduler
     warmup_steps: int = 100
-    lr_decay_factor: float = 0.1      # LR final = LR_initial × lr_decay_factor
+    lr_decay_factor: float = 0.1      #& LR final = LR_initial × lr_decay_factor
 
-    # Mixed precision
-    use_amp: bool = True               # float16 sur GPU (ignoré sur CPU)
+    #* Mixed precision
+    use_amp: bool = True               #& float16 sur GPU (ignoré sur CPU)
 
-    # Gradient accumulation
-    grad_accum_steps: int = 1          # accumule N batches avant optimizer.step()
+    #* Gradient accumulation
+    grad_accum_steps: int = 1          #& accumule N batches avant optimizer.step()
 
 
 # ---------------------------------------------------------------------------
@@ -80,19 +80,16 @@ def resolve_device(requested: str = "auto") -> torch.device:
     return torch.device(requested)
 
 
-def _cosine_lr_with_warmup(
-    step: int,
-    warmup_steps: int,
-    total_steps: int,
-    min_lr_factor: float,
-) -> float:
+def _cosine_lr_with_warmup( step: int, warmup_steps: int, total_steps: int, min_lr_factor: float) -> float:
     """Multiplicateur LR : warmup linéaire puis cosine decay.
 
-    Phase 1 (step < warmup_steps) : 0 → 1 linéairement.
-    Phase 2 (step ≥ warmup_steps) : 1 → min_lr_factor via cosinus.
+    Phase 1 (step < warmup_steps) : 0 -> 1 linéairement.
+    Phase 2 (step ≥ warmup_steps) : 1 -> min_lr_factor via cosinus.
     """
-    if step < warmup_steps:
+    if step < warmup_steps: #& Vérification de sécurité pour éviter la division par zéro
         return step / max(warmup_steps, 1)
+    
+    # & Phase de decay : calcul du multiplicateur via une fonction cosinus lissée
     progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
     cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
     return min_lr_factor + (1.0 - min_lr_factor) * cosine
@@ -189,9 +186,9 @@ def load_checkpoint_if_available(
     global_step  = int(payload.get("step", 0))
     epoch_losses = [float(v) for v in payload.get("epoch_losses", [])]
 
-    # Reconstruire total_steps depuis le checkpoint pour que le scheduler
-    # cosine decay reste aligné sur la même courbe de LR que le run initial.
-    # Si EPOCHS a changé, on recalcule proprement depuis l'epoch courante.
+    #& Reconstruire total_steps depuis le checkpoint pour que le scheduler
+    #& cosine decay reste aligné sur la même courbe de LR que le run initial.
+    #& Si EPOCHS a changé, on recalcule proprement depuis l'epoch courante.
     saved_total_steps = payload.get("total_steps")
     if saved_total_steps is not None:
         remaining = config.epochs - start_epoch
@@ -199,10 +196,10 @@ def load_checkpoint_if_available(
     else:
         total_steps = steps_per_epoch * config.epochs
 
-    # Restaurer le scheduler en reconstruisant avec total_steps correct
-    # puis en chargeant son état sauvegardé.
-    # (Le scheduler doit être reconstruit avant load_state_dict.)
-    # Note: la reconstruction est faite dans train_model() après cet appel.
+    #& Restaurer le scheduler en reconstruisant avec total_steps correct
+    #& puis en chargeant son état sauvegardé.
+    #& (Le scheduler doit être reconstruit avant load_state_dict.)
+    #& Note: la reconstruction est faite dans train_model() après cet appel.
     if scaler is not None and "scaler_state_dict" in payload:
         scaler.load_state_dict(payload["scaler_state_dict"])
 
@@ -213,12 +210,7 @@ def load_checkpoint_if_available(
     return start_epoch, global_step, epoch_losses, total_steps
 
 
-def save_final_model_state(
-    model: torch.nn.Module,
-    final_model_path: Path,
-    device: torch.device,
-    config: TrainConfig,
-) -> None:
+def save_final_model_state(model: torch.nn.Module, final_model_path: Path, device: torch.device,config: TrainConfig) -> None:
     """Sauvegarde un artefact final du modèle pour inférence réutilisable."""
     final_model_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -268,11 +260,7 @@ def _resolve_steps_per_epoch(dataloader, max_steps_per_epoch: int | None) -> int
     return min(len(dataloader), max_steps_per_epoch)
 
 
-def _build_scheduler(
-    optimizer: torch.optim.Optimizer,
-    config: TrainConfig,
-    total_steps: int,
-):
+def _build_scheduler(optimizer: torch.optim.Optimizer, config: TrainConfig, total_steps: int):
     """Construit le scheduler LR (warmup linéaire + cosine decay)."""
     return torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -281,7 +269,7 @@ def _build_scheduler(
             warmup_steps=config.warmup_steps,
             total_steps=total_steps,
             min_lr_factor=config.lr_decay_factor,
-        ),
+        )
     )
 
 
@@ -312,14 +300,8 @@ def _run_forward_loss(
         return loss_fn(logits, y) / config.grad_accum_steps
 
 
-def _optimizer_step(
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    scaler: torch.amp.GradScaler,
-    grad_clip: float,
-) -> float:
-    """Unscale → clip → step optimizer → step scheduler → zero_grad.
+def _optimizer_step(model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, scaler: torch.amp.GradScaler, grad_clip: float) -> float:
+    """Unscale -> clip -> step optimizer -> step scheduler -> zero_grad.
 
     Returns:
         Norme du gradient (float, sync GPU forcée ici seulement).
@@ -376,17 +358,11 @@ def _maybe_save_periodic_checkpoint(
     print(f"[train] periodic checkpoint saved (step={global_step}): {ckpt_path}")
 
 
-# ---------------------------------------------------------------------------
-# Boucle principale
-# ---------------------------------------------------------------------------
+#* ---------------------------------------------------------------------------
+#* Boucle principale
+#* ---------------------------------------------------------------------------
 
-def train_model(
-    model: torch.nn.Module,
-    dataloader,
-    optimizer: torch.optim.Optimizer,
-    loss_fn,
-    config: TrainConfig,
-) -> dict:
+def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optimizer, loss_fn, config: TrainConfig) -> dict:
     """Lance la boucle complète d'entraînement supervisé.
 
     Args:
@@ -420,7 +396,7 @@ def train_model(
         "device":          str(device),
     }
 
-    # ── Reprise depuis checkpoint ──────────────────────────────────────────
+    # * Reprise depuis checkpoint *
     start_epoch, global_step, restored_losses, total_steps = load_checkpoint_if_available(
         model=model,
         optimizer=optimizer,
@@ -432,7 +408,7 @@ def train_model(
     )
     history["epoch_losses"].extend(restored_losses)
 
-    # Construire (ou reconstruire) le scheduler avec le bon total_steps
+    #& Construire (ou reconstruire) le scheduler avec le bon total_steps
     scheduler = _build_scheduler(optimizer, config, total_steps)
     if start_epoch > 0:
         # Restaurer l'état du scheduler depuis le checkpoint
@@ -440,12 +416,12 @@ def train_model(
         if "scheduler_state_dict" in ckpt_data:
             scheduler.load_state_dict(ckpt_data["scheduler_state_dict"])
 
-    # ── Boucle d'entraînement ──────────────────────────────────────────────
+    # * Boucle d'entraînement *
     for epoch in range(start_epoch, config.epochs):
         running_loss   = 0.0
         steps          = 0
         grad_norm      = 0.0
-        # Accumulateur GPU pour le log (évite .item() à chaque step)
+        #& Accumulateur GPU pour le log (évite .item() à chaque step)
         log_loss_accum = 0.0
         log_steps      = 0
         start_t        = time.time()
@@ -461,7 +437,7 @@ def train_model(
 
             is_last_accum = (batch_idx + 1) % config.grad_accum_steps == 0
 
-            # ── Forward + backward ─────────────────────────────────────────
+            # * Forward + backward *
             loss = _run_forward_loss(
                 model=model,
                 loss_fn=loss_fn,
@@ -473,7 +449,7 @@ def train_model(
             )
             scaler.scale(loss).backward()
 
-            # ── Optimizer step (tous les grad_accum_steps batches) ─────────
+            # * Optimizer step (tous les grad_accum_steps batches) *
             if is_last_accum:
                 grad_norm = _optimizer_step(
                     model=model,
@@ -498,19 +474,19 @@ def train_model(
                     total_steps=total_steps,
                 )
 
-            # ── Accumulation de la loss SANS .item() ───────────────────────
-            # On ajoute le tenseur GPU à un accumulateur Python seulement
-            # lors du log (toutes les log_interval steps) pour éviter une
-            # synchronisation GPU→CPU à chaque step.
-            # La running_loss sert au calcul de la loss moyenne par epoch ;
-            # elle est forcée via .item() uniquement en fin d'epoch.
+            # * Accumulation de la loss SANS .item() *
+            #& On ajoute le tenseur GPU à un accumulateur Python seulement
+            #& lors du log (toutes les log_interval steps) pour éviter une
+            #& synchronisation GPU->CPU à chaque step.
+            #& La running_loss sert au calcul de la loss moyenne par epoch ;
+            #& elle est forcée via .item() uniquement en fin d'epoch.
             log_loss_accum += loss.detach()   # tenseur GPU, pas de sync
             log_steps      += 1
             steps          += 1
 
-            # ── Log (sync GPU une seule fois par log_interval) ────────────
+            # * Log (sync GPU une seule fois par log_interval) *
             if (batch_idx + 1) % config.log_interval == 0:
-                # .item() ici → une seule sync GPU toutes les log_interval étapes
+                #& .item() ici -> une seule sync GPU toutes les log_interval étapes
                 avg_log_loss  = float(log_loss_accum.item()) * config.grad_accum_steps / log_steps
                 running_loss += float(log_loss_accum.item()) * config.grad_accum_steps
                 log_loss_accum = 0.0
@@ -525,7 +501,7 @@ def train_model(
                     f"grad_norm={grad_norm:.3f}"
                 )
 
-        # Flush des losses non encore comptabilisées (dernier bloc partiel)
+        #& Flush des losses non encore comptabilisées (dernier bloc partiel)
         if log_steps > 0:
             running_loss += float(log_loss_accum.item()) * config.grad_accum_steps
 
@@ -533,12 +509,9 @@ def train_model(
         elapsed  = time.time() - start_t
         history["epoch_losses"].append(avg_loss)
 
-        print(
-            f"[train] epoch {epoch + 1} done | "
-            f"avg_loss={avg_loss:.4f} | steps={steps} | time={elapsed:.1f}s"
-        )
+        print(f"[train] epoch {epoch + 1} done | avg_loss={avg_loss:.4f} | steps={steps} | time={elapsed:.1f}s")
 
-        # Checkpoint de fin d'epoch (async → ne bloque pas le prochain epoch)
+        #& Checkpoint de fin d'epoch (async -> ne bloque pas le prochain epoch)
         save_checkpoint(
             model=model,
             optimizer=optimizer,
@@ -554,14 +527,9 @@ def train_model(
         )
         print(f"[train] checkpoint saved: {ckpt_path}")
 
-    # ── Artefact final ─────────────────────────────────────────────────────
+    # * Artefact final *
     if config.save_final_model_state:
-        save_final_model_state(
-            model=model,
-            final_model_path=final_model_path,
-            device=device,
-            config=config,
-        )
+        save_final_model_state(model=model, final_model_path=final_model_path, device=device, config=config)
         print(f"[train] final model state saved: {final_model_path}")
 
     return history

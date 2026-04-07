@@ -9,15 +9,15 @@ Pipeline :
     ↓ nn.Embedding (position)      dans le batch sont mis à jour
     ↓ addition
     ↓ Dropout
-    → [batch, seq, embedding_dim]
+    -> [batch, seq, embedding_dim]
 
 Optimisations vs version précédente :
 ──────────────────────────────────────────────────────────────────────────────
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
-| nn.Parameter pour token_emb :   | nn.Embedding → gradients sparse :        |
+| nn.Parameter pour token_emb :   | nn.Embedding -> gradients sparse :        |
 | gradient dense sur tout le      | seules les lignes des tokens du batch    |
-| vocab à chaque step             | reçoivent un gradient → ×N plus rapide  |
+| vocab à chaque step             | reçoivent un gradient -> ×N plus rapide  |
 |                                 | sur un grand vocabulaire (250k+)         |
 | Pas de weight tying possible    | nn.Embedding expose .weight, compatible  |
 |                                 | avec le weight tying dans GPT            |
@@ -53,7 +53,7 @@ class Embedding(nn.Module):
         self.seq_length = seq_length
         self.vocab_size = vocab_size
 
-        # nn.Embedding → gradients sparse, compatible weight tying
+        # nn.Embedding -> gradients sparse, compatible weight tying
         self.token_emb = nn.Embedding(vocab_size, embedding_dim)
         self.position_emb = nn.Embedding(seq_length, embedding_dim)
 

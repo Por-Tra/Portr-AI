@@ -7,7 +7,7 @@ Corrections vs version précédente :
 ──────────────────────────────────────────────────────────────────────────────
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
-| Détection de fused via          | inspect.signature() → accès direct aux  |
+| Détection de fused via          | inspect.signature() -> accès direct aux  |
 | __doc__ : fragile sur builds    | paramètres déclarés, ne dépend pas du   |
 | custom ou si la docstring       | contenu de la docstring                  |
 | change                          |                                          |
@@ -23,17 +23,13 @@ import torch.nn as nn
 
 
 def create_adamw_optimizer(
-    model: nn.Module,
-    lr: float = 3e-4,
-    weight_decay: float = 0.01,
-    betas: tuple[float, float] = (0.9, 0.95),
-    eps: float = 1e-8,
+    model: nn.Module, lr: float = 3e-4, weight_decay: float = 0.01, betas: tuple[float, float] = (0.9, 0.95), eps: float = 1e-8
 ) -> torch.optim.Optimizer:
     """
     Crée un optimizer AdamW avec :
     - déduplication des paramètres partagés (weight tying)
     - séparation decay / no-decay (LayerNorm, biais exclus du weight decay)
-    - kernel fused sur CUDA (PyTorch ≥ 2.0) → ~1.3× plus rapide
+    - kernel fused sur CUDA (PyTorch ≥ 2.0) -> ~1.3× plus rapide
     - foreach comme fallback si fused indisponible
 
     Args:
@@ -47,10 +43,10 @@ def create_adamw_optimizer(
         Optimizer AdamW configuré.
     """
 
-    # ── 1. Dédupliquer les paramètres (weight tying) ─────────────────────
-    # output_head.weight et token_emb.weight pointent sur le même tenseur.
-    # Sans déduplication, ce tenseur apparaît dans deux groupes → gradient
-    # appliqué deux fois et weight_decay aussi.
+    # * 1. Dédupliquer les paramètres (weight tying) *
+    #& output_head.weight et token_emb.weight pointent sur le même tenseur.
+    #& Sans déduplication, ce tenseur apparaît dans deux groupes -> gradient
+    #& appliqué deux fois et weight_decay aussi.
     seen_ids: set[int] = set()
     decay_params:    list[nn.Parameter] = []
     no_decay_params: list[nn.Parameter] = []
@@ -59,10 +55,10 @@ def create_adamw_optimizer(
         if not param.requires_grad:
             continue
         if id(param) in seen_ids:
-            continue  # paramètre partagé déjà compté
+            continue  #& paramètre partagé déjà compté
         seen_ids.add(id(param))
 
-        # LayerNorm, biais et scalaires → pas de weight decay
+        #& LayerNorm, biais et scalaires -> pas de weight decay
         if (
             param.ndim <= 1
             or name.endswith("bias")
@@ -78,42 +74,30 @@ def create_adamw_optimizer(
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
 
-    # ── 2. Détection robuste du kernel fused ──────────────────────────────
-    # inspect.signature() lit les paramètres réellement déclarés dans
-    # __init__, sans dépendre du contenu de la docstring.
+    # * 2. Détection robuste du kernel fused *
+    #& inspect.signature() lit les paramètres réellement déclarés dans
+    #& __init__, sans dépendre du contenu de la docstring.
     _adamw_sig = inspect.signature(torch.optim.AdamW)
-    use_fused = (
-        torch.cuda.is_available()
-        and "fused" in _adamw_sig.parameters
-    )
+    use_fused = (torch.cuda.is_available() and "fused" in _adamw_sig.parameters)
 
     extra_kwargs: dict = {}
     if use_fused:
         extra_kwargs["fused"] = True
     else:
-        # foreach = boucle vectorisée sur CPU/GPU, plus rapide que la version
-        # scalaire par défaut même sans fused kernel
+        #& foreach = boucle vectorisée sur CPU/GPU, plus rapide que la version
+        #& scalaire par défaut même sans fused kernel
         extra_kwargs["foreach"] = True
 
-    optimizer = torch.optim.AdamW(
-        param_groups, lr=lr, betas=betas, eps=eps, **extra_kwargs
-    )
+    optimizer = torch.optim.AdamW(param_groups, lr=lr, betas=betas, eps=eps, **extra_kwargs)
 
     _log_optimizer_info(decay_params, no_decay_params, use_fused)
     return optimizer
 
 
-def _log_optimizer_info(
-    decay_params: list,
-    no_decay_params: list,
-    fused: bool,
-) -> None:
+def _log_optimizer_info(decay_params: list,no_decay_params: list,fused: bool) -> None:
     """Affiche un résumé de la configuration de l'optimizer."""
     n_decay    = sum(p.numel() for p in decay_params)
     n_no_decay = sum(p.numel() for p in no_decay_params)
     total      = n_decay + n_no_decay
     mode       = "fused" if fused else "foreach"
-    print(
-        f"[optimizer] {total:,} params | "
-        f"decay={n_decay:,} | no_decay={n_no_decay:,} | mode={mode}"
-    )
+    print(f"[optimizer] {total:,} params | decay={n_decay:,} | no_decay={n_no_decay:,} | mode={mode}")

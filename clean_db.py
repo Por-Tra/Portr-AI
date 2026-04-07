@@ -142,7 +142,7 @@ def cmd_remove_nulls(db: Database):
 
 def cmd_export_jsonl(db: Database, output_path: str):
     _sep()
-    print(f"  EXPORT JSONL → {output_path}")
+    print(f"  EXPORT JSONL -> {output_path}")
     _sep()
     count = db.export_jsonl(output_path)
     print(f"  {count} entrées exportées.")
@@ -157,7 +157,7 @@ def cmd_vacuum(db: Database):
     db.conn.execute("VACUUM")
     db.conn.commit()
     after = os.path.getsize(db.db_file) / (1024 * 1024)
-    print(f"  Avant : {before:.2f} Mo  →  Après : {after:.2f} Mo  (gain : {before - after:.2f} Mo)")
+    print(f"  Avant : {before:.2f} Mo  ->  Après : {after:.2f} Mo  (gain : {before - after:.2f} Mo)")
     _sep()
 
 

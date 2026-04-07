@@ -36,14 +36,14 @@ def autoregressive_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, ig
     flat_logits = logits.view(-1, vocab_size)   # view évite une copie si contiguous
     flat_targets = targets.view(-1)
 
-    # ── Cross entropy + label smoothing ──────────────────────────────────
+    # * Cross entropy + label smoothing *
     loss = F.cross_entropy(flat_logits, flat_targets, ignore_index=ignore_index, label_smoothing=label_smoothing,)
 
-    # ── Z-loss (optionnel) ────────────────────────────────────────────────
-    # log(sum(exp(z)))² pénalise les logits qui s'éloignent de 0.
-    # Évite les saturations softmax qui bloquent les gradients.
+    # * Z-loss (optionnel) *
+    #& log(sum(exp(z)))² pénalise les logits qui s'éloignent de 0.
+    #& Évite les saturations softmax qui bloquent les gradients.
     if z_loss_weight > 0.0:
-        # Masquer les positions padding pour ne pas les inclure dans z-loss
+        #& Masquer les positions padding pour ne pas les inclure dans z-loss
         mask = flat_targets != ignore_index
         if mask.any():
             log_z = torch.logsumexp(flat_logits[mask], dim=-1)

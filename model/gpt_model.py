@@ -24,9 +24,9 @@ Optimisations vs version précédente :
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | generate() refait un forward    | KV Cache : seul le dernier token est     |
-| O(T) complet à chaque token     | projeté à chaque step → O(1) par step    |
+| O(T) complet à chaque token     | projeté à chaque step -> O(1) par step    |
 | output_head et token_emb ont    | Weight tying : une seule matrice         |
-| deux matrices distinctes        | partagée → moins de paramètres,          |
+| deux matrices distinctes        | partagée -> moins de paramètres,          |
 | (vocab_size × dim chacune)      | meilleure généralisation                 |
 | Initialisation par défaut       | Scaled init (std=0.02) + résiduel        |
 | PyTorch (std=1/√fan_in)         | scaled (std=0.02/√2N) — style GPT-2     |
@@ -171,7 +171,7 @@ class GPT(nn.Module):
 
         À chaque step, seul le dernier token est projeté (T=1).
         Les K et V des tokens précédents sont lus depuis le cache.
-        → Complexité O(1) par token au lieu de O(T).
+        -> Complexité O(1) par token au lieu de O(T).
 
         Args:
             initial_tokens: [batch_size, prompt_len]

@@ -7,12 +7,12 @@ Formule :
     Attention(Q, K, V) = softmax(QKᵀ / √d) V
 
 Pipeline :
-    1. Projection QKV fusionnée → [B, T, 3·C]
-    2. Split en heads           → [B, H, T, head_dim]
-    3. Concat avec KV cache     → [B, H, T_full, head_dim]
+    1. Projection QKV fusionnée -> [B, T, 3·C]
+    2. Split en heads           -> [B, H, T, head_dim]
+    3. Concat avec KV cache     -> [B, H, T_full, head_dim]
     4. Flash Attention (sdpa) ou fallback manuel
-    5. Merge heads              → [B, T, C]
-    6. Projection de sortie     → [B, T, C]
+    5. Merge heads              -> [B, T, C]
+    6. Projection de sortie     -> [B, T, C]
 
 Corrections vs version précédente :
 ──────────────────────────────────────────────────────────────────────────────
@@ -40,11 +40,11 @@ class Attention(nn.Module):
     Attention multi-tête causale avec Flash Attention et KV Cache.
 
     - Flash Attention via F.scaled_dot_product_attention :
-        évite de matérialiser la matrice [B, H, T, T] → 2-4× moins de VRAM.
+        évite de matérialiser la matrice [B, H, T, T] -> 2-4× moins de VRAM.
 
     - KV Cache (use_cache=True) :
         pendant le decode, seul le token courant est projeté (T=1) ;
-        K et V des steps précédents sont lus depuis le cache → O(1) par step.
+        K et V des steps précédents sont lus depuis le cache -> O(1) par step.
 
     - Buffer causal_mask :
         fallback pour PyTorch < 2.0 (sans sdpa), alloué une seule fois.
@@ -127,14 +127,14 @@ class Attention(nn.Module):
             # Règle is_causal :
             #
             #   Training / prefill (past_kv=None, T == T_full) :
-            #     is_causal=True → masque triangulaire inférieur standard.
+            #     is_causal=True -> masque triangulaire inférieur standard.
             #     Correct et optimal.
             #
             #   Decode (past_kv non-None, T=1, T_full > 1) :
             #     is_causal=True demanderait à sdpa un masque [T×T_full]
             #     où seule la ligne Q[0] serait active. PyTorch applique
             #     en réalité un masque [1×1] qui bloque toutes les positions
-            #     du cache sauf la dernière → les K/V passés sont ignorés.
+            #     du cache sauf la dernière -> les K/V passés sont ignorés.
             #     is_causal=False est correct : Q[t] peut légitimement
             #     voir tous les tokens passés (ils sont antérieurs).
             is_causal = not is_decoding

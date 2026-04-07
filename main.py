@@ -51,7 +51,7 @@ td.LIMIT_CORPUS = td.VOCAB_SIZE * 10  #! pas de limite pour un entrainement opti
 SEQ_LENGTH = 256
 BATCH_SIZE = 8
 LOW_RAM_MODE = False #! pas de biais mais reisque de crash sur gros dataset (replacement=True dans sampler)
-MAX_TOKENS_FOR_TRAIN = None #Todo: Passer en None pour aucun limite (mais risque de RAM)
+MAX_TOKENS_FOR_TRAIN = None #! Passer en None pour aucun limite (mais risque de RAM)
 DATALOADER_NUM_WORKERS = 0
 DATALOADER_PIN_MEMORY = False
 MAX_CPU_THREADS = 12
@@ -114,11 +114,11 @@ INFERENCE_ONLY_FROM_FINAL_MODEL = False
 
 def _select_cache_mode_console() -> None:
     """
-    Let the user choose cache strategy at runtime from console input.
+    Laisse l'utilisateur choisir le mode de gestion du cache d'encodage via la console.
 
-    - use_precomputed: force cached encoded data
-    - recompute: force heavy encoding recomputation
-    - auto: use cache if valid, otherwise recompute
+    - use_precomputed: utilise le cache existant uniquement (échoue si cache invalide ou manquant)
+    - recompute: force le recalcul de l'encodage et écrase le cache existant
+    - auto: utilise le cache s'il est valide, sinon recalcul et mise à jour du cache
     """
     global ENCODING_CACHE_MODE
 
@@ -157,6 +157,12 @@ def _select_cache_mode_console() -> None:
 
 
 def _validate_files() -> bool:
+    """
+    Vérifie l'existence des fichiers essentiels et la validité des modes de cache/tokenizer
+
+    Returns:
+        bool: True si tous les fichiers nécessaires sont présents et les modes valides, sinon False
+    """
     if not Path(DATASET_JSONL_PATH).exists():
         print(f"[main] dataset introuvable: {DATASET_JSONL_PATH}")
         return False
@@ -170,7 +176,12 @@ def _validate_files() -> bool:
 
 
 def _select_tokenizer_mode_console() -> None:
-    """Console choice for tokenizer behavior (independent from encoding cache)."""
+    """
+    Permet à l'utilisateur de choisir le mode de gestion du tokenizer via la console
+    - use_existing: utilise le tokenizer déjà entraîné (échoue si absent)
+    - retrain: force le ré-entraînement du tokenizer
+    - auto: utilise le tokenizer existant s'il est présent, sinon entraîne un nouveau tokenizer
+    """
     global TOKENIZER_MODE
 
     print("\n[main] Choix du tokenizer:")
@@ -207,6 +218,18 @@ def _select_tokenizer_mode_console() -> None:
 
 
 def _file_signature(path: str) -> dict:
+    """
+    Fournit une signature de fichier simple pour vérifier l'existence et les métadonnées de base (taille, mtime)
+
+    Args:
+        path (str): Chemin du fichier à vérifier
+
+    Returns:
+        dict: Dictionnaire contenant:
+            - path (str): Chemin du fichier vérifié
+            - exists (bool): Indique si le fichier existe
+            - size (int, optionnel): Taille du fichier en octets (si existe)
+    """
     p = Path(path)
     if not p.exists():
         return {"path": path, "exists": False}
@@ -215,22 +238,40 @@ def _file_signature(path: str) -> dict:
         "path": path,
         "exists": True,
         "size": int(st.st_size),
-        "mtime": float(st.st_mtime),
+        "mtime": float(st.st_mtime)
     }
 
 
 def _build_encoding_meta(tokenizer_model) -> dict:
+    """
+    Construit un dictionnaire de métadonnées décrivant les conditions d'encodage du corpus, 
+    utilisé pour valider la pertinence du cache d'encodage existant et pour décider 
+    s'il faut ré-encoder le corpus ou utiliser le cache.
+
+    Args:
+        tokenizer_model (_type_): Tokenizer déjà chargé, nécessaire pour déterminer la taille du vocabulaire et les métadonnées d'encodage, ainsi que pour valider le cache existant et potentiellement ré-encoder le corpus si nécessaire.
+
+    Returns:
+        dict: disctionnaire de métadonnées
+    """
     return {
         "dataset": _file_signature(DATASET_JSONL_PATH),
         "tokenizer_model": _file_signature(TOKENIZER_MODEL_PATH),
         "target_vocab_size": int(td.VOCAB_SIZE),
         "corpus_limit": int(td.LIMIT_CORPUS),
         "tokenizer_vocab_size": int(len(tokenizer_model.get_token_to_id())),
-        "seq_length": int(SEQ_LENGTH),
+        "seq_length": int(SEQ_LENGTH)
     }
 
 
 def _save_token_cache(tokens: list[int], meta: dict) -> None:
+    """
+    Sauvegarde les tokens encodés dans un format binaire compact et les métadonnées associées pour une validation future.
+
+    Args:
+        tokens (list[int]): Liste des tokens encodés à sauvegarder.
+        meta (dict): Dictionnaire de métadonnées décrivant les conditions d'encodage (dataset, tokenizer, paramètres) pour valider la pertinence du cache lors du chargement.
+    """
     cache_path = Path(ENCODING_CACHE_PATH)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -244,7 +285,7 @@ def _save_token_cache(tokens: list[int], meta: dict) -> None:
         "meta": meta,
         "token_count": len(tokens),
         "dtype": "uint32",
-        "bin_path": str(bin_path),
+        "bin_path": str(bin_path)
     }
     with cache_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f)
@@ -252,6 +293,20 @@ def _save_token_cache(tokens: list[int], meta: dict) -> None:
 
 
 def _load_token_cache(expected_meta: dict) -> torch.Tensor | None:
+    """
+    Charge les tokens encodés à partir du cache si celui-ci est valide en comparant les métadonnées d'encodage attendues avec 
+    celles stockées dans le cache. Si le cache est absent, invalide ou ne correspond pas aux métadonnées attendues, 
+    retourne None pour indiquer qu'un nouvel encodage doit être effectué.
+
+    Args:
+        expected_meta (dict): Dictionnaire de métadonnées décrivant les conditions d'encodage attendues (dataset, tokenizer, paramètres) pour valider la pertinence du cache existant.
+
+    Returns:
+        torch.Tensor | None: Tensor de tokens encodés chargé à partir du cache si valide, 
+        sinon None pour indiquer qu'un nouvel encodage doit être effectué. 
+        Le tensor est chargé de manière memory-mapped pour limiter l'utilisation de RAM
+        lors du chargement de grands fichiers de tokens.
+    """
     cache_path = Path(ENCODING_CACHE_PATH)
     if not cache_path.exists():
         return None
@@ -284,14 +339,20 @@ def _load_token_cache(expected_meta: dict) -> torch.Tensor | None:
         return None
 
     return torch.from_file(
-        str(bin_path),
-        shared=False,
-        size=token_count,
-        dtype=torch.int32,
-    )
+        str(bin_path), shared=False,
+        size=token_count, dtype=torch.int32)
 
 
 def _get_or_encode_tokens(tokenizer_model) -> torch.Tensor | list[int]:
+    """
+    Obtient les tokens encodés à partir du cache si disponible et valide, sinon encode le corpus et sauvegarde le cache pour les futurs runs
+
+    Args:
+        tokenizer_model (_type_): Tokenizer déjà chargé, nécessaire pour déterminer la taille du vocabulaire et les métadonnées d'encodage, ainsi que pour valider le cache existant et potentiellement ré-encoder le corpus si nécessaire.
+
+    Returns:
+        torch.Tensor | list[int]: Tensor de tokens encodés prêt à être utilisé pour le dataset, ou liste de tokens si le cache n'est pas utilisé (dans ce cas, la conversion en tensor se fera plus tard pour éviter de charger tout en RAM d'un coup).
+    """
     expected_meta = _build_encoding_meta(tokenizer_model)
 
     if ENCODING_CACHE_MODE in {"auto", "use_precomputed"}:
@@ -301,18 +362,13 @@ def _get_or_encode_tokens(tokenizer_model) -> torch.Tensor | list[int]:
             return cached_tokens
 
         if ENCODING_CACHE_MODE == "use_precomputed":
-            print(
-                "[main] WARNING: mode use_precomputed actif, mais aucun cache valide "
-                "n'a ete trouve. Fallback automatique vers recompute pour eviter l'arret."
-            )
+            print("[main] WARNING: mode use_precomputed actif, mais aucun cache valide n'a ete trouve. Fallback automatique vers recompute pour eviter l'arret.")
 
     print("[main] encodage du corpus (calcul lourd)...")
     tokens = tokenizer_model.encode_corpus(DATASET_JSONL_PATH, limit=td.LIMIT_CORPUS)
 
     if MAX_TOKENS_FOR_TRAIN and len(tokens) > MAX_TOKENS_FOR_TRAIN:
-        print(
-            f"[main] tokens limites pour RAM: {len(tokens)} -> {MAX_TOKENS_FOR_TRAIN}"
-        )
+        print(f"[main] tokens limites pour RAM: {len(tokens)} -> {MAX_TOKENS_FOR_TRAIN}")
         tokens = tokens[:MAX_TOKENS_FOR_TRAIN]
 
     _save_token_cache(tokens, expected_meta)
@@ -320,7 +376,16 @@ def _get_or_encode_tokens(tokenizer_model) -> torch.Tensor | list[int]:
 
 
 def _check_dataset_quality(path: str, sample_lines: int = 5000) -> bool:
-    """Check JSONL integrity and basic text quality indicators."""
+    """
+    Vérifie la qualité du dataset en échantillonnant les premières lignes du fichier JSONL
+
+    Args:
+        path (str): chemin du fichier dataset.jsonl à vérifier
+        sample_lines (int, optional): Emplacement de l'échantillon. Defaults to 5000.
+
+    Returns:
+        bool: True si le dataset semble de qualité suffisante pour l'entraînement, sinon False
+    """
     dataset_path = Path(path)
     if not dataset_path.exists():
         print(f"[data-check] fichier introuvable: {path}")
@@ -398,14 +463,25 @@ def _check_dataset_quality(path: str, sample_lines: int = 5000) -> bool:
 
 
 def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
+    """
+    Construit un DataLoader PyTorch à partir des tokens encodés, en utilisant les configurations définies et en gérant les modes de cache pour optimiser le processus d'encodage
+
+    Args:
+        tokenizer_model (_type_): Tokenizer déjà chargé, nécessaire pour déterminer la taille du vocabulaire et les métadonnées d'encodage, ainsi que pour valider le cache existant et potentiellement ré-encoder le corpus si nécessaire.
+
+    Raises:
+        ValueError: Pour éviter les erreurs d'entrainements
+
+    Returns:
+        tuple[DataLoader, int]: Le DataLoader prêt pour l'entraînement du modèle GPT, et le nombre total de tokens encodés (utile pour le logging et le calcul des steps par epoch).
+    """
     tokens = _get_or_encode_tokens(tokenizer_model)
     n_tokens = int(tokens.numel()) if isinstance(tokens, torch.Tensor) else len(tokens)
     print(f"[main] nb tokens encodes: {n_tokens}")
 
     if n_tokens <= SEQ_LENGTH:
         raise ValueError(
-            f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. "
-            f"tokens={n_tokens}"
+            f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. tokens={n_tokens}"
         )
 
     dataset = TextDataset(tokens, SEQ_LENGTH)
@@ -416,16 +492,11 @@ def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
             batch_size=BATCH_SIZE,
             sampler=sampler,
             num_workers=DATALOADER_NUM_WORKERS,
-            pin_memory=DATALOADER_PIN_MEMORY,
-        )
+            pin_memory=DATALOADER_PIN_MEMORY)
     else:
-        dataloader = DataLoader(
-            dataset,
-            batch_size=BATCH_SIZE,
-            shuffle=True,
-            num_workers=DATALOADER_NUM_WORKERS,
-            pin_memory=DATALOADER_PIN_MEMORY,
-        )
+        dataloader = DataLoader(dataset,
+            batch_size=BATCH_SIZE, shuffle=True,
+            num_workers=DATALOADER_NUM_WORKERS, pin_memory=DATALOADER_PIN_MEMORY)
 
     steps_per_epoch = len(dataloader)  # ou MAX_STEPS_PER_EPOCH si défini
     total_steps = steps_per_epoch * EPOCHS
@@ -443,6 +514,16 @@ def _build_dataloader(tokenizer_model) -> tuple[DataLoader, int]:
 
 
 def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]:
+    """
+    Entraîne le modèle GPT sur les données fournies par le dataloader, en utilisant les configurations définies et en sauvegardant les checkpoints et le modèle final
+
+    Args:
+        dataloader (DataLoader): Dataloader fournissant les batches d'entraînement
+        tokenizer_model (_type_): Tokenizer déjà chargé, nécessaire pour déterminer la taille du vocabulaire et les métadonnées d'encodage
+
+    Returns:
+        tuple[GPT, dict]: Le modèle GPT entraîné et un dictionnaire d'historique contenant les pertes par époque, les chemins des checkpoints et du modèle final, et d'autres métriques pertinentes pour l'analyse post-entraînement.
+    """
     vocab_size = len(tokenizer_model.get_token_to_id())
     print(f"[main] vocab_size effective: {vocab_size}")
 
@@ -455,11 +536,7 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
         dropout=DROPOUT,
     )
 
-    optimizer = create_adamw_optimizer(
-        model=model,
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-    )
+    optimizer = create_adamw_optimizer( model=model, lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     train_cfg = TrainConfig(
         epochs=EPOCHS,
@@ -481,20 +558,11 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
         max_cpu_interop_threads=MAX_CPU_INTEROP_THREADS,
     )
 
-    loss_fn = partial(
-        autoregressive_cross_entropy,
-        ignore_index=LOSS_IGNORE_INDEX,
-        label_smoothing=LABEL_SMOOTHING,
-        z_loss_weight=Z_LOSS_WEIGHT,
-    )
+    loss_fn = partial(autoregressive_cross_entropy, ignore_index=LOSS_IGNORE_INDEX,
+        label_smoothing=LABEL_SMOOTHING, z_loss_weight=Z_LOSS_WEIGHT)
 
-    history = train_model(
-        model=model,
-        dataloader=dataloader,
-        optimizer=optimizer,
-        loss_fn=loss_fn,
-        config=train_cfg,
-    )
+    history = train_model(model=model, dataloader=dataloader,
+        optimizer=optimizer, loss_fn=loss_fn, config=train_cfg)
 
     if history["epoch_losses"]:
         last_loss = history["epoch_losses"][-1]
@@ -505,6 +573,13 @@ def _train_pipeline(dataloader: DataLoader, tokenizer_model) -> tuple[GPT, dict]
 
 
 def _run_inference(model: GPT, tokenizer_model) -> None:
+    """
+    Fonction d'inférence qui génère du texte à partir d'un prompt donné, en utilisant le modèle GPT entraîné et le tokenizer pour décoder les tokens générés en texte lisible
+
+    Args:
+        model (GPT): Modèle GPT entraîné à utiliser pour l'inférence
+        tokenizer_model (_type_): Tokenizer déjà chargé, nécessaire pour décoder les tokens générés en texte lisible
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -515,7 +590,7 @@ def _run_inference(model: GPT, tokenizer_model) -> None:
         max_new_tokens=INFER_MAX_NEW_TOKENS,
         temperature=INFER_TEMPERATURE,
         top_k=INFER_TOP_K,
-        device=device,
+        device=device
     )
 
     print("[main] inference done")
@@ -541,15 +616,13 @@ def _load_model_for_inference_from_artifact(tokenizer_model, final_model_path: s
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, _payload = load_model_from_final_state(
         final_model_path=model_path,
-        tokenizer=tokenizer_model,
-        device=device,
-    )
+        tokenizer=tokenizer_model, device=device)
     print(f"[main] final model loaded for inference: {model_path}")
     return model
 
 
 def _interactive_reprompt_loop(model: GPT, tokenizer_model) -> None:
-    """Allow repeated prompt tests without rerunning full pipeline."""
+    """Permet à l'utilisateur de tester plusieurs prompts en mode interactif sans relancer le pipeline complet."""
     if not ENABLE_INTERACTIVE_REPROMPT:
         return
 
@@ -593,7 +666,14 @@ def _interactive_reprompt_loop(model: GPT, tokenizer_model) -> None:
         print(f"[reprompt] text:\n{text}\n")
 
 
+# *=====================================================================================================================*
+# *=====================================================================================================================*
+# *=====================================================================================================================*
+
 def main() -> None:
+    """
+    Fonction principale qui va gérer la pipeline complète du modèle
+    """
     print("[main] pipeline start")
 
     _select_tokenizer_mode_console()
@@ -606,12 +686,12 @@ def main() -> None:
         print("[main] dataset quality check echoue, pipeline stop")
         return
 
-    # 1) Tokenization/training tokenizer model
+    #* 1) Tokenization/training tokenizer model
     if RUN_TOKENIZER_TRAINING:
         print("[main] tokenization step...")
         td.TokenizeData(mode=TOKENIZER_MODE)
 
-    # 2) Load tokenizer model
+    #* 2) Load tokenizer model
     print("[main] loading tokenizer...")
     try:
         tokenizer_model = td.Tokenizer.load()
@@ -619,7 +699,7 @@ def main() -> None:
         print("[main] tokenizer introuvable. Lance d'abord TokenizeData().")
         return
 
-    # 3) Build dataloader from encoded corpus
+    #* 3) Build dataloader from encoded corpus
     if INFERENCE_ONLY_FROM_FINAL_MODEL:
         final_model_path = str(Path(FINAL_MODEL_DIR) / FINAL_MODEL_NAME)
         model = _load_model_for_inference_from_artifact(tokenizer_model, final_model_path)
@@ -634,10 +714,10 @@ def main() -> None:
 
     dataloader, _num_tokens = _build_dataloader(tokenizer_model)
 
-    # 4) Train GPT
+    #* 4) Train GPT
     model, history = _train_pipeline(dataloader, tokenizer_model)
 
-    # 5) Checkpoint info
+    #* 5) Checkpoint info
     checkpoint_path = history.get("checkpoint_path")
     final_model_path = history.get("final_model_path")
     print(f"[main] checkpoint path: {checkpoint_path}")
@@ -647,10 +727,10 @@ def main() -> None:
     if reloaded_model is not None:
         model = reloaded_model
 
-    # 6) Inference test
+    #* 6) Inference test
     _run_inference(model, tokenizer_model)
 
-    # 7) Interactive reprompt tests
+    #* 7) Interactive reprompt tests
     _interactive_reprompt_loop(model, tokenizer_model)
 
     print("[main] pipeline complete")
