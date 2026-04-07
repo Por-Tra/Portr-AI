@@ -322,6 +322,10 @@ Training resumes automatically from the last checkpoint if `RESUME_FROM_CHECKPOI
 [train] final loss: 3.21 | perplexity: 24.87
 ```
 
+**Visualization:** training curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be visualized with TensorBoard:
+
+![Aperçu 1](asset/courbe.png)
+
 ### 4. Inference
 
 Inference runs automatically at the end of `main.py`, or directly from the saved artifact:
