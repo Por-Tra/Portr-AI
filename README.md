@@ -73,33 +73,33 @@ The goal is educational and technical: **master every brick** of the Transformer
 Tokens [batch, seq_length]
          │
          ▼
-┌─────────────────────────────┐
+┌-----------------------------┐
 │    Embedding Layer          │  Token Embedding + Position Embedding
 │    (+ Dropout)              │  Sparse gradients, weight tying-ready
-└─────────────┬───────────────┘
+└-------------┬---------------┘
               │  [batch, seq, embedding_dim]
               ▼
-┌─────────────────────────────┐
-│   Transformer Block × N     │  N = 4 (configurable)
+┌-----------------------------┐
+│   Transformer Block x N     │  N = 4 (configurable)
 │                             │
-│  ┌───────────────────────┐  │
+│  ┌-----------------------┐  │
 │  │  Pre-LayerNorm        │  │
 │  │  Multi-Head Attention │  │  Flash Attention (sdpa) + KV Cache
 │  │  + Residual           │  │  Causal mask, is_causal fix for decode
-│  └───────────────────────┘  │
-│  ┌───────────────────────┐  │
+│  └-----------------------┘  │
+│  ┌-----------------------┐  │
 │  │  Pre-LayerNorm        │  │
-│  │  MLP (FFN × 4)        │  │  GELU, Dropout, GPT-2 scaled init
+│  │  MLP (FFN x 4)        │  │  GELU, Dropout, GPT-2 scaled init
 │  │  + Residual           │  │
-│  └───────────────────────┘  │
-└─────────────┬───────────────┘
+│  └-----------------------┘  │
+└-------------┬---------------┘
               │
               ▼
-┌─────────────────────────────┐
+┌-----------------------------┐
 │  Final LayerNorm            │
 │  Output Projection          │  Weight tying with token_emb
 │  → [batch, seq, vocab_size] │
-└─────────────────────────────┘
+└-----------------------------┘
 ```
 
 ### Reference parameters (`small` config)
@@ -112,7 +112,7 @@ Tokens [batch, seq_length]
 | `num_blocks`     | 4          |
 | `seq_length`     | 256        |
 | `dropout`        | 0.1        |
-| `batch_size`     | 8 × 4 grad accum = **32 effective** |
+| `batch_size`     | 8 x 4 grad accum = **32 effective** |
 | Total params     | ~18.7M     |
 
 ---
@@ -120,32 +120,32 @@ Tokens [batch, seq_length]
 ## 🔄 Full Pipeline
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
+┌------------------------------------------------------------------┐
 │                                                                  │
 │  1. CORPUS          Async BFS WebCrawler + local ingest          │
-│     ─────────────►  Wikipedia ZIM / PDF / TXT / HTML             │
+│     -------------►  Wikipedia ZIM / PDF / TXT / HTML             │
 │                     SQLite (crawler.db) + JSONL                  │
 │                                                                  │
 │  2. CLEANING        build_clean_dataset.py                       │
-│     ─────────────►  Sentence-aware chunking, near-dedup          │
+│     -------------►  Sentence-aware chunking, near-dedup          │
 │                     Clean dataset.jsonl                          │
 │                                                                  │
 │  3. TOKENIZATION    BPE from scratch (heap-optimized)            │
-│     ─────────────►  30k vocab, encode_corpus()                   │
+│     -------------►  30k vocab, encode_corpus()                   │
 │                     bpe_model.json                               │
 │                                                                  │
 │  4. DATASET         TextDataset — sliding windows                │
-│     ─────────────►  input[t:t+seq] → target[t+1:t+seq+1]         │
+│     -------------►  input[t:t+seq] → target[t+1:t+seq+1]         │
 │                                                                  │
 │  5. TRAINING        AdamW + cosine decay + warmup                │
-│     ─────────────►  AMP (float16), grad accumulation             │
+│     -------------►  AMP (float16), grad accumulation             │
 │                     Async checkpoints, auto-resume               │
 │                                                                  │
 │  6. INFERENCE       KV Cache (O(1) per token)                    │
-│     ─────────────►  Top-k sampling, temperature                  │
+│     -------------►  Top-k sampling, temperature                  │
 │                     Interactive reprompt mode                    │
 │                                                                  │
-└──────────────────────────────────────────────────────────────────┘
+└------------------------------------------------------------------┘
 ```
 
 ---
@@ -155,49 +155,49 @@ Tokens [batch, seq_length]
 ```
 Portr-AI/
 │
-├── main.py                     # Main pipeline entry point
+├-- main.py                     # Main pipeline entry point
 │
-├── data/
-│   ├── dataset.py              # TextDataset (sliding windows)
-│   ├── DataBase/
-│   │   └── database.py         # SQLite + FTS5, SHA-256 deduplication
-│   └── datasets/
-│       ├── crawler.db          # Raw crawler database
-│       └── dataset.jsonl       # Clean corpus ready for training
+├-- data/
+│   ├-- dataset.py              # TextDataset (sliding windows)
+│   ├-- DataBase/
+│   │   └-- database.py         # SQLite + FTS5, SHA-256 deduplication
+│   └-- datasets/
+│       ├-- crawler.db          # Raw crawler database
+│       └-- dataset.jsonl       # Clean corpus ready for training
 │
-├── tokenizer/
-│   ├── tokenizer.py            # BPE from scratch (heap + lazy deletion)
-│   ├── TokenizeData.py         # Streaming BPE training wrapper
-│   └── token/
-│       └── bpe_model.json      # Saved BPE model
+├-- tokenizer/
+│   ├-- tokenizer.py            # BPE from scratch (heap + lazy deletion)
+│   ├-- TokenizeData.py         # Streaming BPE training wrapper
+│   └-- token/
+│       └-- bpe_model.json      # Saved BPE model
 │
-├── model/
-│   ├── embedding.py            # Token + Position Embedding (sparse grads)
-│   ├── attention.py            # Multi-Head Attention + Flash Attention + KV Cache
-│   ├── transformer_block.py    # TransformerBlock (pre-norm, GELU MLP)
-│   └── gpt_model.py            # Full GPT model + weight tying + scaled init
+├-- model/
+│   ├-- embedding.py            # Token + Position Embedding (sparse grads)
+│   ├-- attention.py            # Multi-Head Attention + Flash Attention + KV Cache
+│   ├-- transformer_block.py    # TransformerBlock (pre-norm, GELU MLP)
+│   └-- gpt_model.py            # Full GPT model + weight tying + scaled init
 │
-├── training/
-│   ├── train.py                # Training loop (AMP, grad accum, async ckpt)
-│   ├── loss.py                 # Cross-entropy + label smoothing + z-loss
-│   └── optimizer.py            # AdamW (fused/foreach, decay/no-decay groups)
+├-- training/
+│   ├-- train.py                # Training loop (AMP, grad accum, async ckpt)
+│   ├-- loss.py                 # Cross-entropy + label smoothing + z-loss
+│   └-- optimizer.py            # AdamW (fused/foreach, decay/no-decay groups)
 │
-├── inference/
-│   └── generate.py             # Generation with KV Cache, BPE decoding
+├-- inference/
+│   └-- generate.py             # Generation with KV Cache, BPE decoding
 │
-├── Crawler/
-│   ├── webcrawler.py           # Async BFS crawler (aiohttp, trafilatura)
-│   └── config.py               # Crawler configuration
+├-- Crawler/
+│   ├-- webcrawler.py           # Async BFS crawler (aiohttp, trafilatura)
+│   └-- config.py               # Crawler configuration
 │
-├── artifacts/
-│   ├── checkpoints/            # Training checkpoints (.pt)
-│   ├── models/                 # Final inference model
-│   └── cache/                  # Binary token cache (memory-mapped)
+├-- artifacts/
+│   ├-- checkpoints/            # Training checkpoints (.pt)
+│   ├-- models/                 # Final inference model
+│   └-- cache/                  # Binary token cache (memory-mapped)
 │
-├── crawl.py                    # Crawler CLI
-├── ingest_local.py             # Local file ingestion (PDF, ZIM, TXT)
-├── build_clean_dataset.py      # Clean dataset builder from SQLite
-└── clean_db.py                 # SQLite audit and cleanup
+├-- crawl.py                    # Crawler CLI
+├-- ingest_local.py             # Local file ingestion (PDF, ZIM, TXT)
+├-- build_clean_dataset.py      # Clean dataset builder from SQLite
+└-- clean_db.py                 # SQLite audit and cleanup
 ```
 
 ---
@@ -367,7 +367,7 @@ All key parameters are centralized in `main.py`. `WARMUP_STEPS` is computed auto
 | `NUM_BLOCKS`           | `4`               | Transformer blocks                   |
 | `SEQ_LENGTH`           | `256`             | Sequence length                      |
 | `BATCH_SIZE`           | `8`               | Batch size per step                  |
-| `GRAD_ACCUM_STEPS`     | `4`               | Effective batch = 8 × 4 = **32**     |
+| `GRAD_ACCUM_STEPS`     | `4`               | Effective batch = 8 x 4 = **32**     |
 | `LEARNING_RATE`        | `1e-4`            | Peak learning rate                   |
 | `WEIGHT_DECAY`         | `0.01`            | L2 penalty (AdamW)                   |
 | `EPOCHS`               | `3`               | Number of epochs                     |
@@ -385,13 +385,13 @@ All key parameters are centralized in `main.py`. `WARMUP_STEPS` is computed auto
 
 | Problem | Solution |
 |---|---|
-| `count_pairs()` O(N × V) naive | **Incremental counting** — only neighboring pairs of the merged token are updated |
+| `count_pairs()` O(N x V) naive | **Incremental counting** — only neighboring pairs of the merged token are updated |
 | `most_frequent_pair()` O(P) | **Max-heap** with lazy deletion → O(log P) |
 | Slow `encode_corpus()` | **Word→ids cache** + compact `array('i')` buffer |
 
 ### Attention
 
-- **Flash Attention** via `F.scaled_dot_product_attention`: avoids materializing the [B, H, T, T] score matrix — 2-4× less VRAM
+- **Flash Attention** via `F.scaled_dot_product_attention`: avoids materializing the [B, H, T, T] score matrix — 2-4x less VRAM
 - **KV Cache**: during decode, only the current token is projected (T=1), past K/V come from cache → O(1) per token
 - **`is_causal` fix**: set to `False` during decode (when `past_kv is not None`) — otherwise the entire KV cache is masked out and ignored
 

@@ -2,8 +2,8 @@
 train.py — version optimisée
 
 Corrections vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
-| Problème (ralentissement ×2-3)  | Solution                                 |
+------------------------------------------------------------------------------
+| Problème (ralentissement x2-3)  | Solution                                 |
 |---------------------------------|------------------------------------------|
 | loss.item() appelé à CHAQUE     | loss.item() déplacé dans le bloc de log  |
 | batch -> synchronisation GPU->CPU | uniquement (toutes les log_interval       |
@@ -23,7 +23,7 @@ Corrections vs version précédente :
 | total_steps recalculé depuis    | checkpoint ; au resume, le scheduler     |
 | epoch 0 -> LR désynchro si      | est reconstruit avec le bon total_steps  |
 | EPOCHS change entre deux runs   | pour garder le cosine decay cohérent.    |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class TrainConfig:
 
     #* Scheduler
     warmup_steps: int = 100
-    lr_decay_factor: float = 0.1      #& LR final = LR_initial × lr_decay_factor
+    lr_decay_factor: float = 0.1      #& LR final = LR_initial x lr_decay_factor
 
     #* Mixed precision
     use_amp: bool = True               #& float16 sur GPU (ignoré sur CPU)
@@ -291,7 +291,7 @@ def _run_forward_loss(
     """Forward pass + calcul de la loss normalisée par grad_accum_steps.
 
     La division par grad_accum_steps permet de conserver la même échelle
-    de gradient qu'un batch de taille batch_size × grad_accum_steps.
+    de gradient qu'un batch de taille batch_size x grad_accum_steps.
 
     Retourne un tenseur GPU, PAS un float. Ne pas appeler .item() ici.
     """

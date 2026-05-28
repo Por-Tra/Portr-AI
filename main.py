@@ -71,7 +71,7 @@ LOG_INTERVAL = 20
 global WARMUP_STEPS #= 2000 #! Calculé dans la fonction _build_dataloader
 LR_DECAY_FACTOR = 0.1
 USE_AMP = True
-GRAD_ACCUM_STEPS = 4    #! était 1 — batch effectif = 8×4 = 32, plus stable
+GRAD_ACCUM_STEPS = 4    #! était 1 — batch effectif = 8x4 = 32, plus stable
 RESUME_FROM_CHECKPOINT = True
 CHECKPOINT_EVERY_STEPS = 500
 

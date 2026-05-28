@@ -6,7 +6,7 @@ Utilise la classe Tokenizer pour entraîner un modèle BPE sur les données
 extraites par le crawler, puis sauvegarde ce modèle pour le pipeline GPT.
 
 Optimisations vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | Tout le dataset chargé en RAM   | Générateur streaming : une ligne lue à  |
@@ -15,7 +15,7 @@ Optimisations vs version précédente :
 | (on entraîne même si modèle ok) | l'entraînement directement               |
 | Recomptage LIMIT_CORPUS dans    | Le générateur délègue la limite à        |
 | deux endroits                   | _build_word_freq (déjà implémentée)      |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations

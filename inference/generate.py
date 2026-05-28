@@ -4,7 +4,7 @@ generate.py
 Inference helpers for GPT generation.
 
 Corrections vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | decode_token_ids : suppression  | Les tokens terminant par </w> injectent  |
@@ -14,7 +14,7 @@ Corrections vs version précédente :
 | texte généré (<BOS>, <PAD>...)  |                                          |
 | sys.path.insert() sur MODEL_DIR | Inutile : gpt_model est importé depuis  |
 | (chemin déjà couvert par ROOT)  | le package model/ normalement            |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations

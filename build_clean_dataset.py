@@ -16,7 +16,7 @@ Usage:
     python build_clean_dataset.py --chunk-size 700 --chunk-overlap 80 --min-chars 180
 
 Corrections vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | 46% des chunks commencent       | Chunking par frontières de phrases :     |
@@ -39,7 +39,7 @@ Corrections vs version précédente :
 | sur 1M chunks                   | dict. md5 pour éviter PYTHONHASHSEED.    |
 |---------------------------------|------------------------------------------|
 | quality_score : boucles         | Remplacées par re.findall sur le sample  |
-| char par char (×2 par chunk)    | -> même résultat, 5-10x plus rapide       |
+| char par char (x2 par chunk)    | -> même résultat, 5-10x plus rapide       |
 |---------------------------------|------------------------------------------|
 | 15 NOISE_PATTERNS séquentiels   | Combinés en 1 seul pattern ORed          |
 | par ligne                       | -> même résultat, ~10x plus rapide        |
@@ -47,7 +47,7 @@ Corrections vs version précédente :
 | Overlap 80 mots = 7.8% du       | Overlap ramené à 0 par défaut (la        |
 | corpus en double, biaise        | continuité inter-chunks est gérée par    |
 | l'entraînement                  | le chunking phrase-aware)                |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -184,16 +184,16 @@ def normalize_text(text: str) -> tuple[str, int]:
     Returns:
         (texte nettoyé, nombre de lignes supprimées pour bruit)
     """
-    # ── 1. Unicode + sauts de ligne
+    # -- 1. Unicode + sauts de ligne
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = RE_CONTROL.sub(" ", text)
     text = text.replace("\u200b", "").replace("\ufeff", "")
 
-    # ── 2. Emojis et symboles non-latin
+    # -- 2. Emojis et symboles non-latin
     text = RE_EMOJI.sub(" ", text)
 
-    # ── 3. Artefacts de ponctuation HTML
+    # -- 3. Artefacts de ponctuation HTML
     for _ in range(3):
         new = RE_FLOATING_DOT.sub(r"\1. \2", text)
         new = RE_FLOATING_COMMA.sub(r"\1, \2", new)
@@ -201,11 +201,11 @@ def normalize_text(text: str) -> tuple[str, int]:
             break
         text = new
 
-    # ── 4. Nettoyage ponctuation répétée et parenthèses vides
+    # -- 4. Nettoyage ponctuation répétée et parenthèses vides
     text = RE_LONG_PUNCT.sub(r"\1\1", text)
     text = RE_EMPTY_PARENS.sub(" ", text)
 
-    # ── 5. Filtrage ligne par ligne
+    # -- 5. Filtrage ligne par ligne
     clean_lines: list[str] = []
     dropped_noise_lines = 0
 
@@ -381,7 +381,7 @@ class DedupIndex:
     2. Near-dup par LSH banding -> O(1) amorti au lieu de O(N²)
 
     Principe du banding LSH :
-    ─────────────────────────
+    -------------------------
     On découpe le fingerprint (liste de n-grammes triés) en BANDS bandes.
     Chaque bande est hashée via MD5 (déterministe, pas sensible à PYTHONHASHSEED).
     Si deux textes partagent au moins une bande identique, ils sont near-dups.
@@ -391,7 +391,7 @@ class DedupIndex:
       P(faux positif) est faible grâce à MD5 (espace 2^128)
 
     Complexité : O(BANDS) par chunk au lieu de O(N) comparaisons -> O(N) amorti global.
-    Mémoire    : O(N × BANDS) entrées de dict (int -> bool).
+    Mémoire    : O(N x BANDS) entrées de dict (int -> bool).
     """
 
     BANDS = 20  # nombre de bandes — augmenter améliore la précision, coûte de la mémoire
@@ -421,12 +421,12 @@ class DedupIndex:
         return hashes
 
     def is_duplicate(self, text: str) -> bool:
-        # ── Niveau 1 : exact SHA-256
+        # -- Niveau 1 : exact SHA-256
         h = hashlib.sha256(text.encode("utf-8")).hexdigest()
         if h in self._exact:
             return True
 
-        # ── Niveau 2 : near-dup LSH banding
+        # -- Niveau 2 : near-dup LSH banding
         if self._use_near_dup:
             tokens      = _text_fingerprint(text)
             band_hashes = self._band_hashes(tokens)

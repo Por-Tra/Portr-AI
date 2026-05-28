@@ -15,7 +15,7 @@ import argparse
 import sys
 import os
 
-# ── Fix Windows : le ProactorEventLoop (défaut sur Python 3.8+/Windows) lève
+# -- Fix Windows : le ProactorEventLoop (défaut sur Python 3.8+/Windows) lève
 # des ConnectionResetError / WinError 10054 sur les connexions fermées par le
 # serveur distant. SelectorEventLoop ne présente pas ce bug avec aiohttp.
 if sys.platform == "win32":

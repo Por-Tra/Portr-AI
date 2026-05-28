@@ -15,16 +15,16 @@ Pipeline :
     6. Projection de sortie     -> [B, T, C]
 
 Corrections vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | is_causal=True invalide avec    | Quand past_kv is not None (decode loop), |
 | KV cache : pendant le decode,   | on passe is_causal=False car Q[T=1] doit |
 | T=1 et T_full > 1. sdpa        | voir tout le cache sans masque causal.   |
-| construisait un masque [1×1]    | Pendant le training et le prefill        |
-| au lieu de [1×T_full], laissant | (past_kv=None), is_causal=True reste     |
+| construisait un masque [1x1]    | Pendant le training et le prefill        |
+| au lieu de [1xT_full], laissant | (past_kv=None), is_causal=True reste     |
 | passer des positions futures    | valide et optimal.                       |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 
 NOTE : Connexions résiduelles et LayerNorm gérées dans TransformerBlock.
 """
@@ -40,7 +40,7 @@ class Attention(nn.Module):
     Attention multi-tête causale avec Flash Attention et KV Cache.
 
     - Flash Attention via F.scaled_dot_product_attention :
-        évite de matérialiser la matrice [B, H, T, T] -> 2-4× moins de VRAM.
+        évite de matérialiser la matrice [B, H, T, T] -> 2-4x moins de VRAM.
 
     - KV Cache (use_cache=True) :
         pendant le decode, seul le token courant est projeté (T=1) ;
@@ -103,16 +103,16 @@ class Attention(nn.Module):
         """
         B, T, C = x.shape
 
-        # ── Projection QKV ────────────────────────────────────────────────
+        # -- Projection QKV ------------------------------------------------
         qkv = self.qkv_proj(x)                      # [B, T, 3C]
         Q, K, V = qkv.split(self.embedding_dim, dim=-1)
 
-        # ── Split en heads [B, H, T, head_dim] ───────────────────────────
+        # -- Split en heads [B, H, T, head_dim] ---------------------------
         Q = Q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         K = K.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # ── KV Cache : concat avec le passé ──────────────────────────────
+        # -- KV Cache : concat avec le passé ------------------------------
         is_decoding = past_kv is not None
         if is_decoding:
             past_K, past_V = past_kv
@@ -122,7 +122,7 @@ class Attention(nn.Module):
         present_kv = (K, V) if use_cache else None
         T_full = K.shape[2]  # longueur totale après concat
 
-        # ── Attention ─────────────────────────────────────────────────────
+        # -- Attention -----------------------------------------------------
         if self._use_flash:
             # Règle is_causal :
             #
@@ -131,9 +131,9 @@ class Attention(nn.Module):
             #     Correct et optimal.
             #
             #   Decode (past_kv non-None, T=1, T_full > 1) :
-            #     is_causal=True demanderait à sdpa un masque [T×T_full]
+            #     is_causal=True demanderait à sdpa un masque [TxT_full]
             #     où seule la ligne Q[0] serait active. PyTorch applique
-            #     en réalité un masque [1×1] qui bloque toutes les positions
+            #     en réalité un masque [1x1] qui bloque toutes les positions
             #     du cache sauf la dernière -> les K/V passés sont ignorés.
             #     is_causal=False est correct : Q[t] peut légitimement
             #     voir tous les tokens passés (ils sont antérieurs).
@@ -152,10 +152,10 @@ class Attention(nn.Module):
             scores = scores.masked_fill(~mask, float("-inf"))
             attn_out = torch.matmul(torch.softmax(scores, dim=-1), V)
 
-        # ── Merge heads [B, T, C] ─────────────────────────────────────────
+        # -- Merge heads [B, T, C] -----------------------------------------
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, C)
 
-        # ── Projection de sortie ──────────────────────────────────────────
+        # -- Projection de sortie ------------------------------------------
         out = self.out_dropout(self.out_proj(attn_out))
 
         return out, present_kv

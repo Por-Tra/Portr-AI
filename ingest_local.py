@@ -260,7 +260,7 @@ def _iter_zim_articles(
     Yields:
         (title: str, content: str, url: str)
     """
-    # ── Déterminer la méthode d'itération disponible ─────────────────
+    # -- Déterminer la méthode d'itération disponible -----------------
     # API moderne (libzim >= 1.0) : archive est itérable directement
     # API ancienne                : get_entry_by_id(i) sur entry_count
     use_iter = hasattr(archive, "__iter__")
@@ -426,32 +426,32 @@ def ingest_zim(path: Path, db: Database, config: dict,
             article_count += 1
             current_scanned_index = entry_index + 1
 
-            # ── Déduplication ─────────────────────────────────────────────
+            # -- Déduplication ---------------------------------------------
             content_hash = _sha256(content)
             if db.hash_exists(content_hash):
                 stats["skipped_dup"] += 1
                 continue
 
-            # ── Longueur ──────────────────────────────────────────────────
+            # -- Longueur --------------------------------------------------
             words = content.split()
             word_count = len(words)
             if word_count < min_w or word_count > max_w:
                 stats["skipped_quality"] += 1
                 continue
 
-            # ── Ratio lettres ─────────────────────────────────────────────
+            # -- Ratio lettres ---------------------------------------------
             if _letters_ratio(content) < min_ratio:
                 stats["skipped_quality"] += 1
                 continue
 
-            # ── Langue ────────────────────────────────────────────────────
+            # -- Langue ----------------------------------------------------
             if target_langs:
                 lang = _detect_lang(content)
                 if lang not in target_langs:
                     stats["skipped_lang"] += 1
                     continue
 
-            # ── Sauvegarde DB ─────────────────────────────────────────────
+            # -- Sauvegarde DB ---------------------------------------------
             saved = db.insert_page(
                 url=url, title=title, content=content,
                 content_hash=content_hash, depth=0,
@@ -552,7 +552,7 @@ def ingest_files(files: list, db: Database, config: dict, jsonl_path: str,
 
     with open(jsonl_path, "a", encoding="utf-8") as jsonl_file:
 
-        # ── Fichiers classiques (PDF / TXT / MD) ──────────────────────
+        # -- Fichiers classiques (PDF / TXT / MD) ----------------------
         for i, path in enumerate(other_files, 1):
             print(f"  [{i}/{len(other_files)}] {path.name}", end=" ... ", flush=True)
 
@@ -617,7 +617,7 @@ def ingest_files(files: list, db: Database, config: dict, jsonl_path: str,
                 print("erreur DB")
                 stats["errors"] += 1
 
-        # ── Fichiers ZIM ──────────────────────────────────────────────
+        # -- Fichiers ZIM ----------------------------------------------
         for zim_path in zim_files:
             ingest_zim(
                 path=zim_path, db=db, config=config,

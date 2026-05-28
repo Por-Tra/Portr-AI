@@ -441,7 +441,7 @@ class WebCrawler:
 
                     content_type = resp.headers.get("content-type", "").lower()
 
-                    # ── PDF ──────────────────────────────────────────
+                    # -- PDF ------------------------------------------
                     if extract_pdf and (
                         "application/pdf" in content_type or _is_pdf_url(url)
                     ):
@@ -454,7 +454,7 @@ class WebCrawler:
                         pdf_bytes = await resp.read()
                         return _FetchResult(pdf_bytes=pdf_bytes)
 
-                    # ── HTML ─────────────────────────────────────────
+                    # -- HTML -----------------------------------------
                     if resp.status == 200 and "text/html" in content_type:
                         html = await resp.text()
                         if _is_captcha_page(html):
@@ -584,14 +584,14 @@ class WebCrawler:
                           session: aiohttp.ClientSession,
                           queue: asyncio.Queue):
 
-        # ── Filtre URL ────────────────────────────────────────────────
+        # -- Filtre URL ------------------------------------------------
         blacklist = self.config.get("url_blacklist", [])
         if _is_url_blacklisted(url, blacklist):
             async with self.stats_lock:
                 self.stats["skipped_url"] += 1
             return
 
-        # ── Visited + limites ─────────────────────────────────────────
+        # -- Visited + limites -----------------------------------------
         async with self.visited_lock:
             if url in self.visited:
                 return
@@ -605,12 +605,12 @@ class WebCrawler:
             self.stats["visited"] += 1
         self._update_bars(visited_delta=1)
 
-        # ── Fetch ─────────────────────────────────────────────────────
+        # -- Fetch -----------------------------------------------------
         result = await self.fetch(session, url)
         if not result:
             return
 
-        # ── Branche PDF ───────────────────────────────────────────────
+        # -- Branche PDF -----------------------------------------------
         if result.is_pdf:
             title, content = _extract_pdf_text(result.pdf_bytes, url)
             if not content.strip():
@@ -654,7 +654,7 @@ class WebCrawler:
                 self._log_progress()
             return
 
-        # ── Branche HTML ──────────────────────────────────────────────
+        # -- Branche HTML ----------------------------------------------
         html = result.html
         title, content = _extract_main_content(html, url)
 

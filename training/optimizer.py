@@ -4,14 +4,14 @@ optimizer.py
 Création de l'optimizer AdamW pour l'entraînement GPT.
 
 Corrections vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | Détection de fused via          | inspect.signature() -> accès direct aux  |
 | __doc__ : fragile sur builds    | paramètres déclarés, ne dépend pas du   |
 | custom ou si la docstring       | contenu de la docstring                  |
 | change                          |                                          |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def create_adamw_optimizer(
     Crée un optimizer AdamW avec :
     - déduplication des paramètres partagés (weight tying)
     - séparation decay / no-decay (LayerNorm, biais exclus du weight decay)
-    - kernel fused sur CUDA (PyTorch ≥ 2.0) -> ~1.3× plus rapide
+    - kernel fused sur CUDA (PyTorch ≥ 2.0) -> ~1.3x plus rapide
     - foreach comme fallback si fused indisponible
 
     Args:

@@ -3,19 +3,19 @@
 
 Version 1.1
 Optimisations clés vs version naïve :
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 | Problème original          | Solution appliquée                           |
 |----------------------------|----------------------------------------------|
-| count_pairs() O(N) × V     | Comptage incrémental — seules les paires     |
+| count_pairs() O(N) x V     | Comptage incrémental — seules les paires     |
 |                            | voisines du token fusionné sont mises à jour |
-| merge_pair() O(N) × V      | word_freq dict : on ne stocke chaque forme   |
-|                            | de mot qu'une seule fois (× sa fréquence)    |
+| merge_pair() O(N) x V      | word_freq dict : on ne stocke chaque forme   |
+|                            | de mot qu'une seule fois (x sa fréquence)    |
 | most_frequent_pair() O(P)  | Heap max avec lazy-deletion -> O(log P)      |
-─────────────────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------------------
 
 Complexité :
-    Naïve   : O(V × N)          N = nb total tokens dans corpus
-    Optimisée: O(V × W × log P) W = nb mots uniques (W << N en général)
+    Naïve   : O(V x N)          N = nb total tokens dans corpus
+    Optimisée: O(V x W x log P) W = nb mots uniques (W << N en général)
 
 Et oui une complexité en log ça c'est beau (⌐■_■)
 Pas moi qui ai fais l'optimisation :-D
@@ -262,7 +262,7 @@ class Tokenizer:
         Applique les merges appris à une séquence de symboles.
 
         Optimisation vs version précédente :
-        ─────────────────────────────────────────────────────────────────
+        -----------------------------------------------------------------
         Avant : à chaque itération, on construisait deux listes
                 intermédiaires (pairs + ranked) de taille O(L), soit
                 2 allocations heap par merge.
@@ -271,8 +271,8 @@ class Tokenizer:
                 - merge_ranks.get() en accès direct (dict local)
                 - best_rank / best_idx mis à jour in-place
                 - une seule allocation pour le nouveau symbols
-                -> ~2× moins d'allocations pour les mots courts/moyens
-        ─────────────────────────────────────────────────────────────────
+                -> ~2x moins d'allocations pour les mots courts/moyens
+        -----------------------------------------------------------------
 
         Args:
             symbols: ex. ['t', 'h', 'e', '</w>']
@@ -392,13 +392,13 @@ class Tokenizer:
         Encode un corpus JSONL complet en liste d'ids.
 
         Optimisations :
-        ──────────────────────────────────────────────────────────────────
+        ------------------------------------------------------------------
         | Cache word -> [ids]  | _apply_merges appelée une seule fois     |
         |                      | par forme de mot unique (hit ~100% après |
         |                      | quelques centaines de lignes)            |
         | array('i')           | Stockage contigu ; extend par batch      |
-        |                      | ~3× plus rapide qu'une list + append     |
-        ──────────────────────────────────────────────────────────────────
+        |                      | ~3x plus rapide qu'une list + append     |
+        ------------------------------------------------------------------
 
         Args:
             corpus_path: Chemin vers le fichier JSONL.

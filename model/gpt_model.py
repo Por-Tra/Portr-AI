@@ -6,31 +6,31 @@ Implémentation complète du LLM style GPT.
 Architecture :
 
     Tokens [batch, seq]
-    ↓
+    |
     Embedding (Token + Position + LayerNorm + Dropout)
     [batch, seq, embedding_dim]
-    ↓
-    N × TransformerBlock (Attention + MLP + Résiduel)
+    |
+    N x TransformerBlock (Attention + MLP + Résiduel)
     [batch, seq, embedding_dim]
-    ↓
+    |
     Final LayerNorm
     [batch, seq, embedding_dim]
-    ↓
+    |
     Output Projection  ← poids partagés avec Token Embedding (weight tying)
     [batch, seq, vocab_size]
 
 Optimisations vs version précédente :
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 | Problème                        | Solution                                 |
 |---------------------------------|------------------------------------------|
 | generate() refait un forward    | KV Cache : seul le dernier token est     |
 | O(T) complet à chaque token     | projeté à chaque step -> O(1) par step    |
 | output_head et token_emb ont    | Weight tying : une seule matrice         |
 | deux matrices distinctes        | partagée -> moins de paramètres,          |
-| (vocab_size × dim chacune)      | meilleure généralisation                 |
+| (vocab_size x dim chacune)      | meilleure généralisation                 |
 | Initialisation par défaut       | Scaled init (std=0.02) + résiduel        |
 | PyTorch (std=1/√fan_in)         | scaled (std=0.02/√2N) — style GPT-2     |
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -59,15 +59,7 @@ class GPT(nn.Module):
     - Scaled init des couches résiduelles (style GPT-2)
     """
 
-    def __init__(
-        self,
-        vocab_size: int,
-        seq_length: int,
-        embedding_dim: int = 256,
-        num_heads: int = 8,
-        num_blocks: int = 4,
-        dropout: float = 0.1,
-    ):
+    def __init__(self, vocab_size: int, seq_length: int, embedding_dim: int = 256, num_heads: int = 8, num_blocks: int = 4, dropout: float = 0.1):
         """
         Args:
             vocab_size   : Nombre de tokens uniques dans le vocabulaire
@@ -84,7 +76,7 @@ class GPT(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_blocks = num_blocks
 
-        # ── Embedding ────────────────────────────────────────────────────
+        # -- Embedding ----------------------------------------------------
         self.embedding = Embedding(
             vocab_size=vocab_size,
             seq_length=seq_length,
@@ -92,7 +84,7 @@ class GPT(nn.Module):
             dropout=dropout,
         )
 
-        # ── Stack de blocs Transformer ───────────────────────────────────
+        # -- Stack de blocs Transformer -----------------------------------
         self.blocks = nn.ModuleList([
             TransformerBlock(
                 embedding_dim=embedding_dim,
@@ -103,19 +95,19 @@ class GPT(nn.Module):
             for _ in range(num_blocks)
         ])
 
-        # ── Final LayerNorm + projection ─────────────────────────────────
+        # -- Final LayerNorm + projection ---------------------------------
         self.final_ln = nn.LayerNorm(embedding_dim)
         self.output_head = nn.Linear(embedding_dim, vocab_size, bias=False)
 
-        # ── Weight tying ─────────────────────────────────────────────────
+        # -- Weight tying -------------------------------------------------
         # output_head et token_emb partagent la même matrice de poids.
-        # - Réduit les paramètres de vocab_size × embedding_dim
+        # - Réduit les paramètres de vocab_size x embedding_dim
         # - Améliore la cohérence sémantique entre entrée et sortie
         self.output_head.weight = self.embedding.token_emb.weight
 
-        # ── Scaled init (style GPT-2) ─────────────────────────────────────
+        # -- Scaled init (style GPT-2) -------------------------------------
         # Les couches de projection résiduelles (out_proj, fc2) sont
-        # initialisées avec std = 0.02 / √(2 × num_blocks) pour éviter
+        # initialisées avec std = 0.02 / √(2 x num_blocks) pour éviter
         # l'explosion du signal à l'init sur des réseaux profonds.
         self._apply_scaled_init()
 
@@ -185,7 +177,7 @@ class GPT(nn.Module):
         self.eval()
         current_tokens = initial_tokens.clone()
 
-        # ── Prefill : encode le prompt complet, construit le KV cache ────
+        # -- Prefill : encode le prompt complet, construit le KV cache ----
         past_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None
 
         with torch.no_grad():
