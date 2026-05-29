@@ -1,27 +1,27 @@
+# -*- coding: utf-8 -*-
+
 """
-Embedding.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Couche d'embedding pour un modèle GPT.
+auteur : @Lucas Contreras Hodapp
 
-Pipeline :
-    tokens [batch, seq]
-    | nn.Embedding (token)       — gradients sparse : seuls les tokens vus
-    | nn.Embedding (position)      dans le batch sont mis à jour
-    | addition
-    | Dropout
-    -> [batch, seq, embedding_dim]
+File name : Embedding.py
 
-Optimisations vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| nn.Parameter pour token_emb :   | nn.Embedding -> gradients sparse :        |
-| gradient dense sur tout le      | seules les lignes des tokens du batch    |
-| vocab à chaque step             | reçoivent un gradient -> xN plus rapide  |
-|                                 | sur un grand vocabulaire (250k+)         |
-| Pas de weight tying possible    | nn.Embedding expose .weight, compatible  |
-|                                 | avec le weight tying dans GPT            |
-------------------------------------------------------------------------------
+description du script:
+    Couche d'embedding pour un modèle GPT.
+
+    Pipeline :
+        tokens [batch, seq]
+        | nn.Embedding (token)       — gradients sparse : seuls les tokens vus
+        | nn.Embedding (position)      dans le batch sont mis à jour
+        | addition
+        | Dropout
+        -> [batch, seq, embedding_dim]
 """
 
 import torch

@@ -1,36 +1,35 @@
+# -*- coding: utf-8 -*-
 """
-gpt_model.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Implémentation complète du LLM style GPT.
+auteur : @Lucas Contreras Hodapp
 
-Architecture :
+File name : gpt_model.py
 
-    Tokens [batch, seq]
-    |
-    Embedding (Token + Position + LayerNorm + Dropout)
-    [batch, seq, embedding_dim]
-    |
-    N x TransformerBlock (Attention + MLP + Résiduel)
-    [batch, seq, embedding_dim]
-    |
-    Final LayerNorm
-    [batch, seq, embedding_dim]
-    |
-    Output Projection  ← poids partagés avec Token Embedding (weight tying)
-    [batch, seq, vocab_size]
+description du script:
+    
+    Implémentation complète du LLM style GPT.
 
-Optimisations vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| generate() refait un forward    | KV Cache : seul le dernier token est     |
-| O(T) complet à chaque token     | projeté à chaque step -> O(1) par step    |
-| output_head et token_emb ont    | Weight tying : une seule matrice         |
-| deux matrices distinctes        | partagée -> moins de paramètres,          |
-| (vocab_size x dim chacune)      | meilleure généralisation                 |
-| Initialisation par défaut       | Scaled init (std=0.02) + résiduel        |
-| PyTorch (std=1/√fan_in)         | scaled (std=0.02/√2N) — style GPT-2     |
-------------------------------------------------------------------------------
+    Architecture :
+
+        Tokens [batch, seq]
+        |
+        Embedding (Token + Position + LayerNorm + Dropout)
+        [batch, seq, embedding_dim]
+        |
+        N x TransformerBlock (Attention + MLP + Résiduel)
+        [batch, seq, embedding_dim]
+        |
+        Final LayerNorm
+        [batch, seq, embedding_dim]
+        |
+        Output Projection  <- poids partagés avec Token Embedding (weight tying)
+        [batch, seq, vocab_size]
 """
 
 from __future__ import annotations
@@ -151,13 +150,7 @@ class GPT(nn.Module):
     # Génération avec KV Cache
     # ------------------------------------------------------------------
 
-    def generate(
-        self,
-        initial_tokens: torch.Tensor,
-        max_length: int,
-        temperature: float = 1.0,
-        top_k: Optional[int] = None,
-    ) -> torch.Tensor:
+    def generate(self, initial_tokens: torch.Tensor, max_length: int, temperature: float = 1.0, top_k: Optional[int] = None) -> torch.Tensor:
         """
         Génère des tokens avec KV Cache.
 
@@ -184,9 +177,7 @@ class GPT(nn.Module):
             # --- Prefill ---
             input_tokens = current_tokens[:, -self.seq_length:]
             if max_length > self.seq_length:
-                raise ValueError(
-                    f"max_length={max_length} depasse seq_length={self.seq_length}."
-                )
+                raise ValueError(f"max_length={max_length} depasse seq_length={self.seq_length}.")
             x = self.embedding(input_tokens)
 
             past_kvs = []
@@ -221,11 +212,7 @@ class GPT(nn.Module):
         return current_tokens
 
     @staticmethod
-    def _sample(
-        logits: torch.Tensor,
-        temperature: float,
-        top_k: Optional[int],
-    ) -> torch.Tensor:
+    def _sample( logits: torch.Tensor, temperature: float, top_k: Optional[int]) -> torch.Tensor:
         """
         Applique température + top-k puis sample un token.
 

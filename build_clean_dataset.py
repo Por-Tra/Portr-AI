@@ -140,13 +140,10 @@ _NOISE_PARTS = [
     r"\b(pr[êe]t\s*\?\s*c'?est\s*parti)\b",
     # Navigation UI pure
     r"\b(sitemap|plan du site|fil d'ariane|breadcrumb)\b",
-    r"\b(DÉCLARATION D'ACCESSIBILITÉ)\b",
+    r"\b(DÉCLARATION D'ACCESSIBILITÉ)\b"
 ]
 
-NOISE_COMBINED = re.compile(
-    "|".join(f"(?:{p})" for p in _NOISE_PARTS),
-    re.IGNORECASE,
-)
+NOISE_COMBINED = re.compile("|".join(f"(?:{p})" for p in _NOISE_PARTS), re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +152,15 @@ NOISE_COMBINED = re.compile(
 
 @dataclass
 class BuildStats:
-    pages_total:            int = 0
-    pages_with_text:        int = 0
+    pages_total: int = 0
+    pages_with_text: int = 0
     pages_kept_after_clean: int = 0
-    chunks_written:         int = 0
-    dropped_empty:          int = 0
-    dropped_low_quality:    int = 0
-    dropped_duplicates:     int = 0
-    dropped_noise_lines:    int = 0
-    dropped_mid_sentence:   int = 0
+    chunks_written: int = 0
+    dropped_empty: int = 0
+    dropped_low_quality: int = 0
+    dropped_duplicates: int = 0
+    dropped_noise_lines: int = 0
+    dropped_mid_sentence: int = 0
 
 
 # ---------------------------------------------------------------------------

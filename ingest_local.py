@@ -1,26 +1,38 @@
 # -*- coding: utf-8 -*-
+
 """
-ingest_local.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Ingestion de fichiers locaux vers la base de données du crawler.
-=> Plus rapide que le webcrawler pour les sources déjà téléchargées (exemple et conseille : Wikipédia ZIM),
+auteur : @Lucas Contreras Hodapp
 
-Formats supportés :
-    .pdf   -> extraction texte via pdfminer.six
-    .txt   -> lecture UTF-8 directe
-    .md    -> lecture UTF-8 directe (Markdown -> texte brut)
-    .zim   -> base Kiwix/Wikipédia (libzim) — itère sur tous les articles
+File name : ingest_local.py
 
-Dépendances :
-    pip install pdfminer.six langdetect libzim beautifulsoup4 lxml
+description du script:
+    Ingestion de fichiers locaux vers la base de données du crawler.
+    => Plus rapide que le webcrawler pour les sources déjà téléchargées (exemple et conseille : Wikipédia ZIM),
 
-Usage :
-    python ingest_local.py                              # GUI
-    python ingest_local.py --files wikipedia_fr.zim     # Wikipédia FR complet
-    python ingest_local.py --dir ./mes_docs             # dossier entier
-    python ingest_local.py --dir ./docs -r              # récursif
-    python ingest_local.py --files a.pdf b.txt c.zim    # mix de formats
+    Formats supportés :
+        .pdf   -> extraction texte via pdfminer.six
+        .txt   -> lecture UTF-8 directe
+        .md    -> lecture UTF-8 directe (Markdown -> texte brut)
+        .zim   -> base Kiwix/Wikipédia (libzim) — itère sur tous les articles
+
+    Dépendances :
+        pip install pdfminer.six langdetect libzim beautifulsoup4 lxml
+
+    Usage :
+        python ingest_local.py                              # GUI
+        python ingest_local.py --files wikipedia_fr.zim     # Wikipédia FR complet
+        python ingest_local.py --dir ./mes_docs             # dossier entier
+        python ingest_local.py --dir ./docs -r              # récursif
+        python ingest_local.py --files a.pdf b.txt c.zim    # mix de formats
 """
+
 
 import argparse
 import hashlib

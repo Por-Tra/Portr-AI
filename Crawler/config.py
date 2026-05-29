@@ -1,10 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-config.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Fichier de configuration du crawlerweb.
+auteur : @Lucas Contreras Hodapp
 
+File name : config.py
+
+description du script:
+    Fichier de configuration pour le crawler web.
+
+    Contient tous les paramètres modifiables du crawler, organisés en
+    sections logiques (crawling, filtrage, stockage, etc.) pour une
+    maintenance facile.
 """
+
+
+
 
 CRAWLER_CONFIG = {
     "start_urls": [

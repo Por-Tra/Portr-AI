@@ -1,6 +1,22 @@
+# -*- coding: utf-8 -*-
 """
-loss.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+
+auteur : @Lucas Contreras Hodapp
+
+File name : loss.py
+
+description du script:
+    Fonctions de calcul de la loss pour l'entraînement GPT.
 """
+
+
+
 
 from __future__ import annotations
 

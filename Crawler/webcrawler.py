@@ -1,23 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-webcrawler.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Module principal du crawler web.
-Crawl récursif en largeur (BFS) avec workers asynchrones parallèles.
+auteur : @Lucas Contreras Hodapp
 
-Pipeline par page :
-    HTML -> extraction contenu principal (trafilatura)
-         -> déduplication (SHA-256)
-         -> filtre langue (langdetect)
-         -> filtre qualité (ratio lettres, longueur)
-         -> sauvegarde SQLite + export JSONL
+File name : webcrawler.py
 
-    PDF  -> téléchargement -> pdfminer -> même pipeline qualité
+description du script:
+    Module principal du crawler web.
+    Crawl récursif en largeur (BFS) avec workers asynchrones parallèles.
 
-Modes :
-    stay_on_domain=True  -> crawl intra-site classique (défaut)
-    stay_on_domain=False -> crawl global "tout internet" (BFS unique sur tous les start_urls)
+    Pipeline par page :
+        HTML -> extraction contenu principal (trafilatura)
+            -> déduplication (SHA-256)
+            -> filtre langue (langdetect)
+            -> filtre qualité (ratio lettres, longueur)
+            -> sauvegarde SQLite + export JSONL
+
+        PDF  -> téléchargement -> pdfminer -> même pipeline qualité
+
+    Modes :
+        stay_on_domain=True  -> crawl intra-site classique (défaut)
+        stay_on_domain=False -> crawl global "tout internet" (BFS unique sur tous les start_urls)
 """
+
+
 
 import asyncio
 import aiohttp

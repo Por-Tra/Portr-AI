@@ -1,13 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Point d'entrée CLI du crawler web.
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Usage :
-    python crawl.py
-    python crawl.py --url https://example.com
-    python crawl.py --url https://example.com --max-pages 100 --max-depth 3
+auteur : @Lucas Contreras Hodapp
 
-Les valeurs passées en argument écrasent celles de Crawler/config.py.
+File name : crawl.py
+
+description du script:
+    Point d'entrée CLI du crawler web.
+
+    Usage :
+        python crawl.py
+        python crawl.py --url https://example.com
+        python crawl.py --url https://example.com --max-pages 100 --max-depth 3
+
+    Les valeurs passées en argument écrasent celles de Crawler/config.py.
 """
 
 import asyncio

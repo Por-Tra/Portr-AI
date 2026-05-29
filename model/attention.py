@@ -1,33 +1,32 @@
 """
-attention.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Implémentation de l'attention multi-tête causale (style GPT).
+auteur : @Lucas Contreras Hodapp
 
-Formule :
-    Attention(Q, K, V) = softmax(QKᵀ / √d) V
+File name : attention.py
 
-Pipeline :
-    1. Projection QKV fusionnée -> [B, T, 3·C]
-    2. Split en heads           -> [B, H, T, head_dim]
-    3. Concat avec KV cache     -> [B, H, T_full, head_dim]
-    4. Flash Attention (sdpa) ou fallback manuel
-    5. Merge heads              -> [B, T, C]
-    6. Projection de sortie     -> [B, T, C]
+description du script:
+    Implémentation de l'attention multi-tête causale (style GPT).
 
-Corrections vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| is_causal=True invalide avec    | Quand past_kv is not None (decode loop), |
-| KV cache : pendant le decode,   | on passe is_causal=False car Q[T=1] doit |
-| T=1 et T_full > 1. sdpa        | voir tout le cache sans masque causal.   |
-| construisait un masque [1x1]    | Pendant le training et le prefill        |
-| au lieu de [1xT_full], laissant | (past_kv=None), is_causal=True reste     |
-| passer des positions futures    | valide et optimal.                       |
-------------------------------------------------------------------------------
+    Formule :
+    Attention(Q, K, V) = softmax(QK^T / sqrt(d)) * V
+
+    Pipeline :
+        1. Projection QKV fusionnée -> [B, T, 3·C]
+        2. Split en heads           -> [B, H, T, head_dim]
+        3. Concat avec KV cache     -> [B, H, T_full, head_dim]
+        4. Flash Attention (sdpa) ou fallback manuel
+        5. Merge heads              -> [B, T, C]
+        6. Projection de sortie     -> [B, T, C]
 
 NOTE : Connexions résiduelles et LayerNorm gérées dans TransformerBlock.
 """
+
 
 import torch
 import torch.nn as nn

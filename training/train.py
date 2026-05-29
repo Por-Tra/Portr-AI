@@ -1,30 +1,21 @@
+# -*- coding: utf-8 -*-
 """
-train.py — version optimisée
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Corrections vs version précédente :
-------------------------------------------------------------------------------
-| Problème (ralentissement x2-3)  | Solution                                 |
-|---------------------------------|------------------------------------------|
-| loss.item() appelé à CHAQUE     | loss.item() déplacé dans le bloc de log  |
-| batch -> synchronisation GPU->CPU | uniquement (toutes les log_interval       |
-| à chaque step, pipeline CUDA    | steps). Entre les logs, la loss est       |
-| bloqué, async annulé            | accumulée comme tenseur sur GPU sans      |
-|                                 | jamais forcer de sync.                   |
-|---------------------------------|------------------------------------------|
-| running_loss += loss_item à     | running_loss est un float Python initialisé|
-| chaque step avec loss.item()    | à 0.0 ; la sync n'arrive qu'au log.      |
-| même hors du bloc log           |                                          |
-|---------------------------------|------------------------------------------|
-| torch.save() synchrone sur le   | Checkpoint écrit dans un thread séparé   |
-| thread principal -> bloque le    | via threading.Thread(daemon=True) pour   |
-| training pendant l'I/O disque   | ne pas bloquer la boucle principale.     |
-|---------------------------------|------------------------------------------|
-| Scheduler restauré mais         | total_steps sauvegardé dans le           |
-| total_steps recalculé depuis    | checkpoint ; au resume, le scheduler     |
-| epoch 0 -> LR désynchro si      | est reconstruit avec le bon total_steps  |
-| EPOCHS change entre deux runs   | pour garder le cosine decay cohérent.    |
-------------------------------------------------------------------------------
+auteur : @Lucas Contreras Hodapp
+
+File name : train.py
+
+description du script:
+    Script d'entraînement du modèle GPT sur le dataset préparé.
+    
 """
+
 
 from __future__ import annotations
 

@@ -1,42 +1,29 @@
-"""Implémentation optimisée de Byte Pair Encoding (BPE).
+# -*- coding: utf-8 -*-
+"""
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
+auteur : @Lucas Contreras Hodapp
 
-Version 1.1
-Optimisations clés vs version naïve :
------------------------------------------------------------------------------
-| Problème original          | Solution appliquée                           |
-|----------------------------|----------------------------------------------|
-| count_pairs() O(N) x V     | Comptage incrémental — seules les paires     |
-|                            | voisines du token fusionné sont mises à jour |
-| merge_pair() O(N) x V      | word_freq dict : on ne stocke chaque forme   |
-|                            | de mot qu'une seule fois (x sa fréquence)    |
-| most_frequent_pair() O(P)  | Heap max avec lazy-deletion -> O(log P)      |
------------------------------------------------------------------------------
+File name : tokenizer.py
 
-Complexité :
+description du script:
+    Implémentation optimisée de Byte Pair Encoding (BPE) pour la tokenisation.
+    Complexité :
     Naïve   : O(V x N)          N = nb total tokens dans corpus
     Optimisée: O(V x W x log P) W = nb mots uniques (W << N en général)
 
-Et oui une complexité en log ça c'est beau (⌐■_■)
-Pas moi qui ai fais l'optimisation :-D
+    Et oui une complexité en log ça c'est beau (⌐■_■)
 
-Usage :
-    python tokenizer.py
-    from tokenizer.tokenizer import Tokenizer
-    tok = Tokenizer.load("tokenizer/token/bpe_model.json")
-    tokens = tok.tokenize_text("votre texte à tokeniser ici")
-
-Version 1.2
-Limiter le corpus d'entraînement aux mots pour éviter les redondances
-massives (ex: "the" 10 000 fois).
-Optimisation de l'encodage du corpus en utilisant des fonctions locales
-et des structures de données plus efficaces.
-Amélioration -> 10-20it/s -> 50-+1000it/s sur un corpus de 50 000 lignes.
-
-Version 1.3
-_apply_merges : scan unique sans listes intermédiaires + merge en place
-               via indices (évite 2 allocations list par itération).
-encode_corpus : cache word -> [ids] + array('i') pour le buffer de sortie.
+    Usage :
+        python tokenizer.py
+        from tokenizer.tokenizer import Tokenizer
+        tok = Tokenizer.load("tokenizer/token/bpe_model.json")
+        tokens = tok.tokenize_text("votre texte à tokeniser ici")
 """
 
 from __future__ import annotations

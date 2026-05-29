@@ -1,16 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-Script de nettoyage et d'audit de la base de données crawler.
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Actions disponibles :
-    python clean_db.py --stats          Statistiques générales
-    python clean_db.py --dupes          Lister les doublons de contenu
-    python clean_db.py --remove-dupes   Supprimer les doublons (garde la 1ère occurrence)
-    python clean_db.py --remove-short N Supprimer les pages avec < N mots (défaut 50)
-    python clean_db.py --remove-nulls   Supprimer les pages sans contenu
-    python clean_db.py --export-jsonl   Ré-exporter le dataset.jsonl depuis la DB
-    python clean_db.py --vacuum         VACUUM SQLite (réduit la taille du fichier)
-    python clean_db.py --all            Tout faire (audit + nettoyage complet)
+auteur : @Lucas Contreras Hodapp
+
+File name : clean_db.py
+
+description du script:
+    Script de nettoyage et d'audit de la base de données crawler.
+
+    Actions disponibles :
+        python clean_db.py --stats          Statistiques générales
+        python clean_db.py --dupes          Lister les doublons de contenu
+        python clean_db.py --remove-dupes   Supprimer les doublons (garde la 1ère occurrence)
+        python clean_db.py --remove-short N Supprimer les pages avec < N mots (défaut 50)
+        python clean_db.py --remove-nulls   Supprimer les pages sans contenu
+        python clean_db.py --export-jsonl   Ré-exporter le dataset.jsonl depuis la DB
+        python clean_db.py --vacuum         VACUUM SQLite (réduit la taille du fichier)
+        python clean_db.py --all            Tout faire (audit + nettoyage complet)
 """
 
 import argparse

@@ -1,26 +1,39 @@
+# -*- coding: utf-8 -*-
+
 """
-dataset.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Fichier définissant la classe TextDataset, un wrapper PyTorch pour les données textuelles tokenisées.
+auteur : @Lucas Contreras Hodapp
 
-Exemple du fonctionnement:
-Tokens : [10,25,33,48,77,90,12]
+File name : dataset.py
 
-dataset:
-input  : [10,25,33,48]
-target : [25,33,48,77]
+description du script:
+    Fichier définissant la classe TextDataset, un wrapper PyTorch pour les données textuelles tokenisées.
 
-input  : [25,33,48,77]
-target : [33,48,77,90]
+    Exemple du fonctionnement:
+    Tokens : [10,25,33,48,77,90,12]
 
-input  : [33,48,77,90]
-target : [48,77,90,12]
+    dataset:
+    input  : [10,25,33,48]
+    target : [25,33,48,77]
 
-Uitlisation:
-tokens = tokenizer.encode(corpus)
-dataset = TextDataset(tokens, seq_length=128)
-x, y = dataset[0]
+    input  : [25,33,48,77]
+    target : [33,48,77,90]
+
+    input  : [33,48,77,90]
+    target : [48,77,90,12]
+
+    Uitlisation:
+    tokens = tokenizer.encode(corpus)
+    dataset = TextDataset(tokens, seq_length=128)
+    x, y = dataset[0]
 """
+
 
 import torch
 from torch.utils.data import Dataset

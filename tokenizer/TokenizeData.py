@@ -1,21 +1,21 @@
+# -*- coding: utf-8 -*-
+
 """
-TokenizeData.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Lance et configure le processus de tokenisation des données textuelles brutes.
-Utilise la classe Tokenizer pour entraîner un modèle BPE sur les données
-extraites par le crawler, puis sauvegarde ce modèle pour le pipeline GPT.
+auteur : @Lucas Contreras Hodapp
 
-Optimisations vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| Tout le dataset chargé en RAM   | Générateur streaming : une ligne lue à  |
-| (list de strings) avant train() | la fois, jamais tout en mémoire          |
-| Logique load/train incorrecte   | Si le modèle existe : on skippe          |
-| (on entraîne même si modèle ok) | l'entraînement directement               |
-| Recomptage LIMIT_CORPUS dans    | Le générateur délègue la limite à        |
-| deux endroits                   | _build_word_freq (déjà implémentée)      |
-------------------------------------------------------------------------------
+File name : TokenizeData.py
+
+description du script:
+    Lance et configure le processus de tokenisation des données textuelles brutes.
+    Utilise la classe Tokenizer pour entraîner un modèle BPE sur les données
+    extraites par le crawler, puis sauvegarde ce modèle pour le pipeline GPT.
 """
 
 from __future__ import annotations

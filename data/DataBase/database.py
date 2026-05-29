@@ -1,7 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Module de gestion de la base de données SQLite avec FTS5.
-Stocke les pages crawlées (texte uniquement).
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+
+auteur : @Lucas Contreras Hodapp
+
+File name : database.py
+
+description du script:
+    Module de gestion de la base de données SQLite avec FTS5.
+    Stocke les pages crawlées (texte uniquement).
 """
 
 import sqlite3

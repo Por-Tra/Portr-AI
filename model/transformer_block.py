@@ -1,32 +1,31 @@
+# -*- coding: utf-8 -*-
+
 """
-transformer_block.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Bloc Transformer complet (pre-norm, style GPT).
+auteur : @Lucas Contreras Hodapp
 
-Structure :
-    x
-    | LayerNorm
-    | Multi-Head Attention  (+ KV Cache optionnel)
-    | Connexion résiduelle
-    | LayerNorm
-    | MLP (FeedForward)
-    | Connexion résiduelle
-    -> sortie
+File name : transformer_block.py
 
-Corrections vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| MLP.__init__ initialisait fc1   | Init manuelle supprimée de MLP :         |
-| et fc2 avec std=0.02 AVANT que  | GPT._apply_scaled_init() est le seul     |
-| GPT._apply_scaled_init() ne     | responsable de l'init des projections    |
-| ré-initialise fc2 avec le bon   | résiduelles (fc2 avec std scalé,         |
-| std scalé -> double init, fc2   | fc1 avec std=0.02). Ordre garanti,      |
-| recevait l'init de GPT en       | pas de collision.                        |
-| dernier mais fc1 gardait 0.02   |                                          |
-------------------------------------------------------------------------------
+description du script:
+    Bloc Transformer complet (pre-norm, style GPT).
 
-NOTE : Les connexions résiduelles et LayerNorm sont gérées ici.
+    Structure :
+        x
+        | LayerNorm
+        | Multi-Head Attention  (+ KV Cache optionnel)
+        | Connexion résiduelle
+        | LayerNorm
+        | MLP (FeedForward)
+        | Connexion résiduelle
+        -> sortie
+
+    NOTE : Les connexions résiduelles et LayerNorm sont gérées ici.
        L'attention multi-tête est définie dans attention.py.
 """
 
@@ -56,9 +55,9 @@ class MLP(nn.Module):
     def __init__(self, embedding_dim: int, dropout: float = 0.1):
         super().__init__()
         hidden_dim = 4 * embedding_dim
-        self.fc1     = nn.Linear(embedding_dim, hidden_dim, bias=False)
-        self.fc2     = nn.Linear(hidden_dim, embedding_dim, bias=False)
-        self.act     = nn.GELU()
+        self.fc1 = nn.Linear(embedding_dim, hidden_dim, bias=False)
+        self.fc2 = nn.Linear(hidden_dim, embedding_dim, bias=False)
+        self.act = nn.GELU()
         self.dropout = nn.Dropout(dropout)
         # /!\  Pas d'init manuelle ici.
         # GPT._apply_scaled_init() applique :
@@ -76,13 +75,7 @@ class TransformerBlock(nn.Module):
     Supporte le KV Cache pour une inférence efficace token-par-token.
     """
 
-    def __init__(
-        self,
-        embedding_dim: int,
-        num_heads: int,
-        dropout: float = 0.1,
-        max_seq_length: int = 1024,
-    ):
+    def __init__(self, embedding_dim: int, num_heads: int, dropout: float = 0.1, max_seq_length: int = 1024):
         super().__init__()
 
         self.ln1       = nn.LayerNorm(embedding_dim)
@@ -90,17 +83,13 @@ class TransformerBlock(nn.Module):
             embedding_dim,
             num_heads,
             dropout,
-            max_seq_length=max_seq_length,
+            max_seq_length=max_seq_length
         )
         self.ln2 = nn.LayerNorm(embedding_dim)
         self.mlp = MLP(embedding_dim, dropout)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    def forward(self, x: torch.Tensor, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                 use_cache: bool = False) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Args:
             x        : [B, T, C]

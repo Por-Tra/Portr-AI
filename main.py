@@ -1,17 +1,26 @@
 """
-main.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Pipeline principal du projet:
-1) Tokenisation
-2) Encodage du corpus
-3) Construction dataset/dataloader
-4) Entrainement GPT
-5) Sauvegarde checkpoint
-6) Inference de test
-7) Mode reprompt interactif (test de plusieurs prompts sans relancer le pipeline)
+auteur : @Lucas Contreras Hodapp
 
+File name : main.py
 
+description du script:
+    Pipeline principal du projet:
+    1) Tokenisation
+    2) Encodage du corpus
+    3) Construction dataset/dataloader
+    4) Entrainement GPT
+    5) Sauvegarde checkpoint
+    6) Inference de test
+    7) Mode reprompt interactif (test de plusieurs prompts sans relancer le pipeline)
 """
+
 
 from __future__ import annotations
 

@@ -1,18 +1,20 @@
+# -*- coding: utf-8 -*-
 """
-optimizer.py
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
 
-Création de l'optimizer AdamW pour l'entraînement GPT.
+auteur : @Lucas Contreras Hodapp
 
-Corrections vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| Détection de fused via          | inspect.signature() -> accès direct aux  |
-| __doc__ : fragile sur builds    | paramètres déclarés, ne dépend pas du   |
-| custom ou si la docstring       | contenu de la docstring                  |
-| change                          |                                          |
-------------------------------------------------------------------------------
+File name : optimizer.py
+
+description du script:
+    Création de l'optimizer AdamW pour l'entraînement GPT.
 """
+
 
 from __future__ import annotations
 
@@ -22,9 +24,8 @@ import torch
 import torch.nn as nn
 
 
-def create_adamw_optimizer(
-    model: nn.Module, lr: float = 3e-4, weight_decay: float = 0.01, betas: tuple[float, float] = (0.9, 0.95), eps: float = 1e-8
-) -> torch.optim.Optimizer:
+def create_adamw_optimizer(model: nn.Module, lr: float = 3e-4,
+                            weight_decay: float = 0.01, betas: tuple[float, float] = (0.9, 0.95), eps: float = 1e-8) -> torch.optim.Optimizer:
     """
     Crée un optimizer AdamW avec :
     - déduplication des paramètres partagés (weight tying)

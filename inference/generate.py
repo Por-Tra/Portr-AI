@@ -1,21 +1,29 @@
-"""
-generate.py
+# -*- coding: utf-8 -*-
 
-Inference helpers for GPT generation.
-
-Corrections vs version précédente :
-------------------------------------------------------------------------------
-| Problème                        | Solution                                 |
-|---------------------------------|------------------------------------------|
-| decode_token_ids : suppression  | Les tokens terminant par </w> injectent  |
-| brute de </w> -> mots concaténés | un espace après eux avant concaténation  |
-| sans espaces                    |                                          |
-| Tokens spéciaux inclus dans le  | Tokens spéciaux filtrés au décodage      |
-| texte généré (<BOS>, <PAD>...)  |                                          |
-| sys.path.insert() sur MODEL_DIR | Inutile : gpt_model est importé depuis  |
-| (chemin déjà couvert par ROOT)  | le package model/ normalement            |
-------------------------------------------------------------------------------
 """
+██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
+██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
+██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
+██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
+██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+
+auteur : @Lucas Contreras Hodapp
+
+File name : generate.py
+
+
+description du script:
+    Script d'inférence pour générer du texte à partir d'un modèle GPT entraîné.
+
+    Fonctionnalités :
+        - Chargement d'un checkpoint ou artefact final de modèle.
+        - Génération de texte à partir d'un prompt avec contrôle de la température
+          et du top-k sampling.
+        - Décodage des ids de tokens générés en texte lisible, en gérant les
+          subtilités du BPE (tokens finissant par </w>, préfixe ▁, etc.).
+"""
+
 
 from __future__ import annotations
 
@@ -57,12 +65,12 @@ def load_model_from_final_state( final_model_path: str | Path, tokenizer, device
     payload = torch.load(final_model_path, map_location="cpu", weights_only=True)
     hparams = payload.get("model_hparams") or {}
 
-    vocab_size    = int(hparams.get("vocab_size")    or len(tokenizer.get_token_to_id()))
-    seq_length    = int(hparams.get("seq_length")    or 128)
+    vocab_size = int(hparams.get("vocab_size") or len(tokenizer.get_token_to_id()))
+    seq_length = int(hparams.get("seq_length") or 128)
     embedding_dim = int(hparams.get("embedding_dim") or 256)
-    num_heads     = int(hparams.get("num_heads")     or 8)
-    num_blocks    = int(hparams.get("num_blocks")    or 4)
-    dropout       = float(hparams.get("dropout")     or 0.1)
+    num_heads = int(hparams.get("num_heads") or 8)
+    num_blocks = int(hparams.get("num_blocks") or 4)
+    dropout = float(hparams.get("dropout") or 0.1)
 
     model = GPT(
         vocab_size=vocab_size,
