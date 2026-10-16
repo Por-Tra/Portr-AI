@@ -38,8 +38,7 @@ The goal is educational and technical: implement every building block of a Trans
 
 The data sources, tokenizer and quality filters are configured for French. The pipeline can be adapted to another language by changing the data sources and the tokenizer settings.
 
-> [!NOTE]
-> **Project status.** The pipeline is complete and functional, but it has not been run on the full dataset because of hardware constraints (GPU VRAM, training time). Compute is the only bottleneck.
+
 
 **Contents:** [Pipeline](#pipeline) · [Model architecture](#model-architecture) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Technical optimizations](#technical-optimizations) · [Project structure](#project-structure) · [Roadmap](#roadmap) · [References](#references)
 
@@ -325,8 +324,7 @@ L'objectif est pédagogique et technique : implémenter chaque brique d'un modè
 
 Les sources de données, le tokenizer et les filtres de qualité sont configurés pour le français. Le pipeline peut être adapté à une autre langue en modifiant les sources de données et les paramètres du tokenizer.
 
-> [!NOTE]
-> **État du projet.** Le pipeline est complet et fonctionnel, mais il n'a pas pu être exécuté sur le dataset complet à cause de contraintes matérielles (VRAM GPU, temps d'entraînement). Le calcul est le seul facteur limitant.
+
 
 **Sommaire :** [Chaîne de traitement](#chaîne-de-traitement) · [Architecture du modèle](#architecture-du-modèle) · [Prérequis et installation](#prérequis-et-installation) · [Utilisation](#utilisation) · [Paramètres](#paramètres) · [Optimisations techniques](#optimisations-techniques) · [Structure du projet](#structure-du-projet) · [Feuille de route](#feuille-de-route) · [Références](#références)
 
