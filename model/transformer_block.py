@@ -23,7 +23,8 @@ description du script:
         | LayerNorm
         | MLP (FeedForward)
         | Connexion résiduelle
-        -> sortie
+        V 
+      sortie
 
     NOTE : Les connexions résiduelles et LayerNorm sont gérées ici.
        L'attention multi-tête est définie dans attention.py.
@@ -59,10 +60,10 @@ class MLP(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, embedding_dim, bias=False)
         self.act = nn.GELU()
         self.dropout = nn.Dropout(dropout)
-        # /!\  Pas d'init manuelle ici.
-        # GPT._apply_scaled_init() applique :
-        #   - fc1 : std=0.02  (projection d'entrée, pas résiduelle)
-        #   - fc2 : std=0.02/√(2N)  (projection résiduelle, scaled GPT-2)
+        #! /!\  Pas d'init manuelle ici.
+        #! GPT._apply_scaled_init() applique :
+        #!   - fc1 : std=0.02  (projection d'entrée, pas résiduelle)
+        #!   - fc2 : std=0.02/√(2N)  (projection résiduelle, scaled GPT-2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.dropout(self.fc2(self.act(self.fc1(x))))
@@ -78,7 +79,7 @@ class TransformerBlock(nn.Module):
     def __init__(self, embedding_dim: int, num_heads: int, dropout: float = 0.1, max_seq_length: int = 1024):
         super().__init__()
 
-        self.ln1       = nn.LayerNorm(embedding_dim)
+        self.ln1 = nn.LayerNorm(embedding_dim)
         self.attention = Attention(
             embedding_dim,
             num_heads,
@@ -88,25 +89,23 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(embedding_dim)
         self.mlp = MLP(embedding_dim, dropout)
 
-    def forward(self, x: torch.Tensor, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                 use_cache: bool = False) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        """
+    def forward(self, x: torch.Tensor, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, use_cache: bool = False) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """_summary_
+
         Args:
-            x        : [B, T, C]
-            past_kv  : KV cache du step précédent (inférence uniquement)
-            use_cache: si True, retourne le KV cache courant
+            x (torch.Tensor): [B, T, C]  — T=1 pendant le decode avec KV cache
+            past_kv (Optional[Tuple[torch.Tensor, torch.Tensor]], optional): KV cache du step précédent (inférence uniquement). Defaults to None.
+            use_cache (bool, optional): si True, retourne le KV cache courant. Defaults to False.
 
         Returns:
-            out       : [B, T, C]
-            present_kv: (K, V) courant si use_cache=True, sinon None
+            Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]: [B, T, C] et le KV cache courant si use_cache=True, sinon None
         """
-        # Pre-norm + attention + résiduel
-        attn_out, present_kv = self.attention(
-            self.ln1(x), past_kv=past_kv, use_cache=use_cache
-        )
+        
+        #& Pre-norm + attention + résiduel
+        attn_out, present_kv = self.attention(self.ln1(x), past_kv=past_kv, use_cache=use_cache)
         x = x + attn_out
 
-        # Pre-norm + MLP + résiduel
+        #& Pre-norm + MLP + résiduel
         x = x + self.mlp(self.ln2(x))
 
         return x, present_kv

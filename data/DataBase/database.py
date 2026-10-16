@@ -22,7 +22,8 @@ from urllib.parse import urlparse
 
 
 class Database:
-    """Base de données SQLite avec index FTS5 pour la recherche full-text."""
+    """Base de données SQLite avec index FTS5 pour la recherche full-text.
+    """
 
     def __init__(self, db_file: str = "data/crawler.db"):
         """
@@ -33,9 +34,9 @@ class Database:
         self.conn: sqlite3.Connection | None = None
         self._initialize()
 
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Initialisation
+    #* ------------------------------------------------------------------
 
     def _initialize(self) -> bool:
         """Crée les tables, triggers et index si nécessaire."""
@@ -48,7 +49,7 @@ class Database:
             self.conn.row_factory = sqlite3.Row
             cur = self.conn.cursor()
 
-            # Table principale
+            #& Table principale
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pages (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,12 +66,12 @@ class Database:
                 )
             """)
 
-            # Migration : ajouter content_hash si absent (base existante)
+            #& Migration : ajouter content_hash si absent (base existante)
             existing_cols = {row[1] for row in cur.execute("PRAGMA table_info(pages)")}
             if "content_hash" not in existing_cols:
                 cur.execute("ALTER TABLE pages ADD COLUMN content_hash TEXT")
 
-            # Table FTS5 (recherche full-text)
+            #& Table FTS5 (recherche full-text)
             cur.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
                     url,
@@ -83,7 +84,7 @@ class Database:
                 )
             """)
 
-            # Triggers de synchronisation FTS5
+            #& Triggers de synchronisation FTS5
             cur.execute("""
                 CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
                     INSERT INTO pages_fts(rowid, url, domain, title, content)
@@ -116,13 +117,11 @@ class Database:
             print(f"[DB ERROR] Initialisation : {e}")
             return False
 
-    # ------------------------------------------------------------------
-    # Écriture
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                          Écriture
+    #* ------------------------------------------------------------------
 
-    def insert_page(self, url: str, title: str, content: str, content_hash: str,
-                    depth: int, status_code: int, word_count: int,
-                    link_count: int, commit: bool = True) -> bool:
+    def insert_page(self, url: str, title: str, content: str, content_hash: str, depth: int, status_code: int, word_count: int, link_count: int, commit: bool = True) -> bool:
         """
         Insère ou met à jour une page.
 
@@ -174,12 +173,16 @@ class Database:
         except sqlite3.Error:
             return False
 
-    # ------------------------------------------------------------------
-    # Lecture
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                              Lecture
+    #* ------------------------------------------------------------------
 
     def get_page_count(self) -> int:
-        """Retourne le nombre total de pages stockées."""
+        """Retourne le nombre total de pages stockées.
+
+        Returns:
+            int: nombre de pages stockés
+        """
         try:
             row = self.conn.execute("SELECT COUNT(*) FROM pages").fetchone()
             return row[0]
@@ -242,7 +245,9 @@ class Database:
             return []
 
     def get_statistics(self) -> sqlite3.Row | None:
-        """Retourne des statistiques globales sur la base."""
+        """
+        Retourne des statistiques globales sur la base.
+        """
         try:
             return self.conn.execute("""
                 SELECT
@@ -257,9 +262,9 @@ class Database:
             print(f"[DB ERROR] get_statistics : {e}")
             return None
 
-    # ------------------------------------------------------------------
-    # Cycle de vie
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Cycle de vie
+    #* ------------------------------------------------------------------
 
     def close(self):
         """Ferme la connexion."""

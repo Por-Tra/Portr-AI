@@ -60,8 +60,11 @@ import re
 import sqlite3
 import sys
 import unicodedata
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -353,69 +356,84 @@ def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Déduplication — fix #1 : LSH banding O(N) amorti
+# Déduplication — MinHash + LSH banding
 # ---------------------------------------------------------------------------
 
-def _text_fingerprint(text: str, ngram: int = 8) -> list[str]:
-    """
-    Calcule une liste triée de n-grammes de mots.
-    On retourne une list (et non frozenset) pour conserver un ordre stable
-    nécessaire au découpage en bandes LSH.
-    """
+def _text_shingles(text: str, ngram: int = 8) -> set[str]:
+    """Ensemble des n-grammes de mots (shingles) d'un texte."""
     words = text.lower().split()
     if len(words) < ngram:
-        return sorted(set(words))
-    return sorted(set(
-        " ".join(words[i:i + ngram]) for i in range(len(words) - ngram + 1)
-    ))
+        return set(words)
+    return {" ".join(words[i:i + ngram]) for i in range(len(words) - ngram + 1)}
+
+
+def _choose_bands(num_perm: int, threshold: float) -> tuple[int, int]:
+    """
+    Choisit (bands, rows) avec bands x rows = num_perm pour que le seuil LSH
+    (1/bands)^(1/rows) soit le plus proche possible du seuil Jaccard visé.
+    """
+    best = (num_perm, 1)
+    best_err = float("inf")
+    for rows in range(1, num_perm + 1):
+        if num_perm % rows:
+            continue
+        bands = num_perm // rows
+        err = abs((1.0 / bands) ** (1.0 / rows) - threshold)
+        if err < best_err:
+            best, best_err = (bands, rows), err
+    return best
 
 
 class DedupIndex:
     """
     Déduplication à deux niveaux :
 
-    1. SHA-256 exact          -> set, O(1) lookup
-    2. Near-dup par LSH banding -> O(1) amorti au lieu de O(N²)
+    1. SHA-256 exact            -> set, O(1) lookup
+    2. Near-dup MinHash + LSH   -> O(bands) par chunk au lieu de O(N)
 
-    Principe du banding LSH :
-    -------------------------
-    On découpe le fingerprint (liste de n-grammes triés) en BANDS bandes.
-    Chaque bande est hashée via MD5 (déterministe, pas sensible à PYTHONHASHSEED).
-    Si deux textes partagent au moins une bande identique, ils sont near-dups.
+    Principe :
+    ----------
+    - Signature MinHash : pour NUM_PERM fonctions de hash h_k, on garde
+      min(h_k(shingle)) sur tous les shingles du texte. P(min égaux) = Jaccard.
+    - Banding : la signature est découpée en `bands` bandes de `rows` valeurs.
+      Deux textes partageant une bande identique sont near-dups.
+      P(détection) = 1 - (1 - J^rows)^bands, seuil ≈ (1/bands)^(1/rows).
+      (bands, rows) sont choisis pour que ce seuil ≈ near_dup_threshold.
 
-    Avec BANDS=20, ROWS=5 et Jaccard ≥ 0.8 :
-      P(détection)  ≈ 1 - (1 - 0.8^5)^20  ≈ 99.97 %   -> quasi aucun faux négatif
-      P(faux positif) est faible grâce à MD5 (espace 2^128)
-
-    Complexité : O(BANDS) par chunk au lieu de O(N) comparaisons -> O(N) amorti global.
-    Mémoire    : O(N x BANDS) entrées de dict (int -> bool).
+    L'ancienne version découpait la liste TRIÉE des n-grammes par position :
+    un seul n-gramme ajouté décalait toutes les bandes -> quasi aucun
+    near-dup détecté, et near_dup_threshold n'était pas utilisé.
     """
 
-    BANDS = 20  # nombre de bandes — augmenter améliore la précision, coûte de la mémoire
-    ROWS  = 5   # n-grammes par bande — augmenter réduit les faux positifs
+    NUM_PERM = 120   # taille de signature (beaucoup de diviseurs -> choix fin de bands/rows)
+    _PRIME = (1 << 61) - 1
+    _MAX_HASH = (1 << 32) - 1
 
-    def __init__(self, near_dup_threshold: float = 0.8):
+    def __init__(self, near_dup_threshold: float = 0.8, seed: int = 1):
         self._exact: set[str] = set()
-        # Un dict par bande : hash_md5_int -> True (présence seule suffit)
-        self._buckets: list[dict[int, bool]] = [
-            {} for _ in range(self.BANDS)
-        ]
         self._use_near_dup = near_dup_threshold < 1.0
+        self.bands, self.rows = _choose_bands(self.NUM_PERM, near_dup_threshold)
+        self._buckets: list[set[bytes]] = [set() for _ in range(self.bands)]
 
-    def _band_hashes(self, tokens: list[str]) -> list[int]:
-        """
-        Découpe la liste de tokens en BANDS bandes et retourne leurs hashs MD5.
-        MD5 est utilisé (et non hash()) pour garantir la reproductibilité
-        indépendamment de PYTHONHASHSEED.
-        """
-        size = max(1, len(tokens) // self.BANDS)
-        hashes: list[int] = []
-        for i in range(self.BANDS):
-            band = tokens[i * size: (i + 1) * size]
-            digest = hashlib.md5(" ".join(band).encode(), usedforsecurity=False).digest()
-            # On prend les 8 premiers octets comme entier pour clé de dict légère
-            hashes.append(int.from_bytes(digest[:8], "little"))
-        return hashes
+        # Permutations universelles h(x) = (a*x + b) mod p, tronquées à 32 bits.
+        # a, b < 2^32 et x < 2^32 -> a*x + b < 2^64 : pas d'overflow en uint64.
+        rng = np.random.default_rng(seed)
+        self._a = rng.integers(1, 1 << 32, size=self.NUM_PERM, dtype=np.uint64)
+        self._b = rng.integers(0, 1 << 32, size=self.NUM_PERM, dtype=np.uint64)
+
+    def _signature(self, shingles: set[str]) -> np.ndarray:
+        hashes = np.fromiter(
+            (zlib.crc32(sh.encode("utf-8")) for sh in shingles),
+            dtype=np.uint64,
+            count=len(shingles),
+        )
+        # [NUM_PERM, n_shingles] -> min sur les shingles
+        perm = (self._a[:, None] * hashes[None, :] + self._b[:, None]) % np.uint64(self._PRIME)
+        return (perm & np.uint64(self._MAX_HASH)).min(axis=1).astype(np.uint32)
+
+    def _band_keys(self, signature: np.ndarray) -> list[bytes]:
+        r = self.rows
+        return [signature[i * r:(i + 1) * r].tobytes() for i in range(self.bands)]
 
     def is_duplicate(self, text: str) -> bool:
         # -- Niveau 1 : exact SHA-256
@@ -423,19 +441,16 @@ class DedupIndex:
         if h in self._exact:
             return True
 
-        # -- Niveau 2 : near-dup LSH banding
+        # -- Niveau 2 : near-dup MinHash LSH
         if self._use_near_dup:
-            tokens      = _text_fingerprint(text)
-            band_hashes = self._band_hashes(tokens)
-
-            # Vérification : au moins un bucket contient déjà ce hash ?
-            for band_idx, bh in enumerate(band_hashes):
-                if bh in self._buckets[band_idx]:
-                    return True  # near-dup détecté
-
-            # Pas de doublon -> on indexe dans tous les buckets
-            for band_idx, bh in enumerate(band_hashes):
-                self._buckets[band_idx][bh] = True
+            shingles = _text_shingles(text)
+            if shingles:
+                keys = self._band_keys(self._signature(shingles))
+                for band_idx, key in enumerate(keys):
+                    if key in self._buckets[band_idx]:
+                        return True  # near-dup détecté
+                for band_idx, key in enumerate(keys):
+                    self._buckets[band_idx].add(key)
 
         self._exact.add(h)
         return False

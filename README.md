@@ -1,306 +1,143 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
-<img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white"/>
-<img src="https://img.shields.io/badge/Status-In_Development-orange?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/Language-French_corpus-blue?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/Architecture-GPT_Transformer-7952B3?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge"/>
+![Portr-AI logo](asset/logo.png)
 
-<br/><br/>
+# Portr-AI
 
-<!-- ```
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
-``` -->
+**A French GPT-style language model, built from scratch**
 
-![LOGO](asset/logo.png)
-
-### **A French GPT-style LLM, built entirely from scratch**
-*Understanding every component — from raw corpus to text generation*
+Every component implemented by hand, from raw corpus to text generation.
 
 <br/>
 
-[![📖 Documentation](https://img.shields.io/badge/📖_Documentation-por--tra.github.io-4A90D9?style=for-the-badge)](https://por-tra.github.io/Portr-AI-DOC/)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)
+![Architecture](https://img.shields.io/badge/Architecture-GPT_Transformer-7952B3?style=flat-square)
+![Corpus](https://img.shields.io/badge/Corpus-French-blue?style=flat-square)
+![Status](https://img.shields.io/badge/Status-In_development-orange?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
-> 🇫🇷 [Version française disponible plus bas](#-version-française)
+[English](#english) | [Français](#francais)
 
 </div>
 
 ---
 
-> **Note:** The project has not been fully tested on the complete dataset due to hardware constraints (GPU VRAM, training time). The pipeline is complete and functional — compute is the only bottleneck.
+<a id="english"></a>
+
+## Overview
+
+**Portr-AI** is an autoregressive, GPT-style language model for French, written from scratch in Python and PyTorch. It uses no pretrained weights and no high-level model library.
+
+The goal is educational and technical: implement every building block of a Transformer language model, from BPE tokenization to GPU training and text generation.
+
+- Complete pipeline: data collection, cleaning, tokenization, training, inference
+- Custom BPE tokenizer, optimized with a max-heap
+- Decoder-only Transformer with Flash Attention and KV cache
+- Resumable training with mixed precision and asynchronous checkpoints
+
+The data sources, tokenizer and quality filters are configured for French. The pipeline can be adapted to another language by changing the data sources and the tokenizer settings.
+
+> [!NOTE]
+> **Project status.** The pipeline is complete and functional, but it has not been run on the full dataset because of hardware constraints (GPU VRAM, training time). Compute is the only bottleneck.
+
+**Contents:** [Pipeline](#pipeline) · [Model architecture](#model-architecture) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Technical optimizations](#technical-optimizations) · [Project structure](#project-structure) · [Roadmap](#roadmap) · [References](#references)
 
 ---
 
-## 📋 Table of Contents
+## Pipeline
 
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Full Pipeline](#-full-pipeline)
-- [Project Structure](#-project-structure)
-- [Installation](#-installation)
-- [Usage](#-usage)
-  - [1. Data collection](#1-data-collection)
-  - [2. Cleaning and preprocessing](#2-cleaning-and-preprocessing)
-  - [3. Training](#3-training)
-  - [4. Inference](#4-inference)
-- [Hyperparameters](#-hyperparameters)
-- [Technical optimizations](#-technical-optimizations)
-- [Roadmap](#-roadmap)
-- [Resources](#-resources)
-- [Version française](#-version-française)
+```mermaid
+flowchart LR
+    A["Collection<br/>web and local sources"] --> B["Cleaning<br/>chunking, near-dedup"]
+    B --> C["Tokenization<br/>BPE from scratch"]
+    C --> D["Training<br/>AdamW, AMP, checkpoints"]
+    D --> E["Inference<br/>KV cache, top-k sampling"]
+```
+
+| Stage | What it does | Output |
+|---|---|---|
+| Collection | Gathers raw text into a SQLite database | `crawler.db` |
+| Cleaning | Sentence-aware chunking and near-duplicate removal | `dataset.jsonl` |
+| Tokenization | Trains the BPE model and encodes the corpus into a binary cache | `bpe_model.json` |
+| Training | Next-token prediction on sliding windows | checkpoints, final model |
+| Inference | Autoregressive generation with KV cache | generated text |
 
 ---
 
-## 🧠 Overview
+## Model architecture
 
-**Portr-AI** is an autoregressive language model (GPT-style), built entirely **from scratch in Python/PyTorch** — no pretrained model, no library shortcut.
+```mermaid
+flowchart TB
+    T["Input tokens<br/>[batch, seq_length]"] --> E["Token + position embedding<br/>dropout"]
+    E --> B
+    subgraph B["Transformer block, repeated N times"]
+        direction TB
+        N1["Pre-LayerNorm"] --> A["Causal multi-head attention<br/>Flash Attention, KV cache<br/>+ residual"]
+        A --> N2["Pre-LayerNorm"] --> M["MLP with GELU<br/>+ residual"]
+    end
+    B --> F["Final LayerNorm"]
+    F --> O["Output projection<br/>tied with token embedding"]
+    O --> L["Logits<br/>[batch, seq_length, vocab_size]"]
+```
 
-The goal is educational and technical: **master every brick** of the Transformer architecture, from BPE tokenization to text generation, including GPU training.
+- Decoder-only GPT with causal self-attention and pre-LayerNorm blocks
+- Output head weight-tied to the token embedding
+- Flash Attention through `scaled_dot_product_attention`, and a KV cache at decode time
+- GPT-2 style scaled initialization
 
-> 💡 The model targets a **French corpus** — data, tokenizer and quality filters are configured for French. The pipeline can be adapted to other languages by changing data sources and tokenizer settings.
+Model sizes are listed in [Configuration](#configuration).
 
 ---
 
-## 🏗️ Architecture
+## Installation
 
-```
-Tokens [batch, seq_length]
-         │
-         ▼
-┌-----------------------------┐
-│    Embedding Layer          │  Token Embedding + Position Embedding
-│    (+ Dropout)              │  Sparse gradients, weight tying-ready
-└-------------┬---------------┘
-              │  [batch, seq, embedding_dim]
-              ▼
-┌-----------------------------┐
-│   Transformer Block x N     │  N = 4 (configurable)
-│                             │
-│  ┌-----------------------┐  │
-│  │  Pre-LayerNorm        │  │
-│  │  Multi-Head Attention │  │  Flash Attention (sdpa) + KV Cache
-│  │  + Residual           │  │  Causal mask, is_causal fix for decode
-│  └-----------------------┘  │
-│  ┌-----------------------┐  │
-│  │  Pre-LayerNorm        │  │
-│  │  MLP (FFN x 4)        │  │  GELU, Dropout, GPT-2 scaled init
-│  │  + Residual           │  │
-│  └-----------------------┘  │
-└-------------┬---------------┘
-              │
-              ▼
-┌-----------------------------┐
-│  Final LayerNorm            │
-│  Output Projection          │  Weight tying with token_emb
-│  → [batch, seq, vocab_size] │
-└-----------------------------┘
-```
-
-### Reference parameters (`small` config)
-
-| Parameter        | Value      |
-|------------------|------------|
-| `vocab_size`     | 30 000     |
-| `embedding_dim`  | 384        |
-| `num_heads`      | 8          |
-| `num_blocks`     | 4          |
-| `seq_length`     | 256        |
-| `dropout`        | 0.1        |
-| `batch_size`     | 8 x 4 grad accum = **32 effective** |
-| Total params     | ~18.7M     |
-
----
-
-## 🔄 Full Pipeline
-
-```
-┌------------------------------------------------------------------┐
-│                                                                  │
-│  1. CORPUS          Async BFS WebCrawler + local ingest          │
-│     -------------►  Wikipedia ZIM / PDF / TXT / HTML             │
-│                     SQLite (crawler.db) + JSONL                  │
-│                                                                  │
-│  2. CLEANING        build_clean_dataset.py                       │
-│     -------------►  Sentence-aware chunking, near-dedup          │
-│                     Clean dataset.jsonl                          │
-│                                                                  │
-│  3. TOKENIZATION    BPE from scratch (heap-optimized)            │
-│     -------------►  30k vocab, encode_corpus()                   │
-│                     bpe_model.json                               │
-│                                                                  │
-│  4. DATASET         TextDataset — sliding windows                │
-│     -------------►  input[t:t+seq] → target[t+1:t+seq+1]         │
-│                                                                  │
-│  5. TRAINING        AdamW + cosine decay + warmup                │
-│     -------------►  AMP (float16), grad accumulation             │
-│                     Async checkpoints, auto-resume               │
-│                                                                  │
-│  6. INFERENCE       KV Cache (O(1) per token)                    │
-│     -------------►  Top-k sampling, temperature                  │
-│                     Interactive reprompt mode                    │
-│                                                                  │
-└------------------------------------------------------------------┘
-```
-
----
-
-## 📁 Project Structure
-
-```
-Portr-AI/
-│
-├-- main.py                     # Main pipeline entry point
-│
-├-- data/
-│   ├-- dataset.py              # TextDataset (sliding windows)
-│   ├-- DataBase/
-│   │   └-- database.py         # SQLite + FTS5, SHA-256 deduplication
-│   └-- datasets/
-│       ├-- crawler.db          # Raw crawler database
-│       └-- dataset.jsonl       # Clean corpus ready for training
-│
-├-- tokenizer/
-│   ├-- tokenizer.py            # BPE from scratch (heap + lazy deletion)
-│   ├-- TokenizeData.py         # Streaming BPE training wrapper
-│   └-- token/
-│       └-- bpe_model.json      # Saved BPE model
-│
-├-- model/
-│   ├-- embedding.py            # Token + Position Embedding (sparse grads)
-│   ├-- attention.py            # Multi-Head Attention + Flash Attention + KV Cache
-│   ├-- transformer_block.py    # TransformerBlock (pre-norm, GELU MLP)
-│   └-- gpt_model.py            # Full GPT model + weight tying + scaled init
-│
-├-- training/
-│   ├-- train.py                # Training loop (AMP, grad accum, async ckpt)
-│   ├-- loss.py                 # Cross-entropy + label smoothing + z-loss
-│   └-- optimizer.py            # AdamW (fused/foreach, decay/no-decay groups)
-│
-├-- inference/
-│   └-- generate.py             # Generation with KV Cache, BPE decoding
-│
-├-- Crawler/
-│   ├-- webcrawler.py           # Async BFS crawler (aiohttp, trafilatura)
-│   └-- config.py               # Crawler configuration
-│
-├-- artifacts/
-│   ├-- checkpoints/            # Training checkpoints (.pt)
-│   ├-- models/                 # Final inference model
-│   └-- cache/                  # Binary token cache (memory-mapped)
-│
-├-- crawl.py                    # Crawler CLI
-├-- ingest_local.py             # Local file ingestion (PDF, ZIM, TXT)
-├-- build_clean_dataset.py      # Clean dataset builder from SQLite
-└-- clean_db.py                 # SQLite audit and cleanup
-```
-
----
-
-## ⚙️ Installation
-
-### Requirements
-
-- Python **3.10+**
-- CUDA (optional, strongly recommended for training)
-- ~4 GB RAM minimum, 8+ GB recommended
-
-### 1. Clone the repository
+**Requirements:** Python 3.10+, CUDA (optional but strongly recommended for training), about 6 GB of RAM at minimum and 16 GB or more recommended.
 
 ```bash
 git clone https://github.com/Por-tra/Portr-AI.git
 cd Portr-AI
-```
-
-### 2. Create a virtual environment
-
-```bash
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS
 .venv\Scripts\activate           # Windows
+pip install -r requirements.txt
 ```
 
-### 3. Install dependencies
+For GPU training, install PyTorch with the official command matching your CUDA version, for example CUDA 12.1:
 
 ```bash
-pip install -r requirements.txt
-
-# For PyTorch, use the official installer matching your CUDA version.
-# Example (CUDA 12.1):
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
 
-# Optional (PDF + ZIM support):
+Optional PDF and Wikipedia ZIM support:
+
+```bash
 pip install pdfminer.six libzim
 ```
 
 ---
 
-## 🚀 Usage
+## Usage
 
-### 1. Data Collection
+### 1. Data collection
 
-#### Web crawler (async BFS)
-
-```bash
-# Crawl using URLs defined in Crawler/config.py
-python crawl.py
-
-# Pass URLs and options directly
-python crawl.py --url https://example.com --max-pages 5000 --max-depth 5
-```
-
-**Configuration:** edit `Crawler/config.py` to set `start_urls`, `stay_on_domain`, `max_pages`, `num_workers`, `db_file`, and `jsonl_output`.
-
-#### Local file ingestion
+Raw text comes from an async web crawler (`crawl.py`) and from local files (`ingest_local.py`: PDF, TXT, Markdown, Wikipedia ZIM).
 
 ```bash
-# GUI file selector
-python ingest_local.py
-
-# Specific files (PDF, TXT, Markdown)
-python ingest_local.py --files document.pdf notes.txt
-
-# Full French Wikipedia (ZIM file from Kiwix — may take several hours)
-python ingest_local.py --files wikipedia_fr.zim \
-    --commit-every 200 --progress-every 250
-
-# Recursive folder
+python crawl.py --url https://example.com
 python ingest_local.py --dir ./my_documents -r
+python ingest_local.py --files wikipedia_fr.zim     # full French Wikipedia (Kiwix), can take several hours
 ```
 
-### 2. Cleaning and Preprocessing
-
-#### Database audit and cleanup
+### 2. Cleaning and preprocessing
 
 ```bash
-python clean_db.py --stats                  # Show statistics
-python clean_db.py --all                    # Full cleanup + export
-python clean_db.py --remove-dupes           # Remove duplicates only
-python clean_db.py --remove-short 100       # Remove pages under 100 words
+python clean_db.py --stats          # database statistics
+python clean_db.py --all            # full cleanup and export
+python build_clean_dataset.py       # build the clean training dataset
 ```
 
-#### Rebuild a clean dataset
-
-```bash
-# Default options (700-word chunks, no overlap)
-python build_clean_dataset.py
-
-# Custom
-python build_clean_dataset.py \
-    --db data/datasets/crawler.db \
-    --jsonl data/datasets/dataset.jsonl \
-    --chunk-size 700 \
-    --chunk-overlap 0 \
-    --min-chars 180 \
-    --near-dup-threshold 0.8
-```
-
-> **Note:** chunking is **sentence-aware** — no mid-sentence cuts. Near-duplicate detection uses Jaccard 8-gram fingerprinting.
+Chunking is sentence-aware (no mid-sentence cuts) and near-duplicates are detected with Jaccard 8-gram fingerprinting. Thresholds are listed in [Configuration](#configuration).
 
 ### 3. Training
 
@@ -308,41 +145,21 @@ python build_clean_dataset.py \
 python main.py
 ```
 
-The interactive pipeline will ask you to choose:
-- tokenizer mode (`auto` / `use_existing` / `retrain`)
-- encoding cache mode (`auto` / `use_precomputed` / `recompute`)
+The interactive pipeline asks for:
 
-Training resumes automatically from the last checkpoint if `RESUME_FROM_CHECKPOINT = True`.
+- the tokenizer mode: `auto`, `use_existing` or `retrain`
+- the encoding cache mode: `auto`, `use_precomputed` or `recompute`
 
-**Training output:**
+Training resumes automatically from the last checkpoint when `RESUME_FROM_CHECKPOINT = True`. Curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be viewed with TensorBoard.
 
-```
-[train] epoch=1/3 step=20  loss=10.35 lr=2.50e-07 grad_norm=29.3
-[train] epoch=1/3 step=100 loss=8.17  lr=1.25e-06 grad_norm=8.7
-...
-[train] epoch 1 done | avg_loss=4.32 | steps=54443584 | time=...
-[train] final loss: 3.21 | perplexity: 24.87
-```
-
-**Visualization:** training curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be visualized with TensorBoard:
-
-![Aperçu 1](asset/courbe.png)
-![Aperçu 2](asset/courbe2.png)
+<p align="center">
+  <img src="asset/courbe.png" width="48%" alt="Training curves, plot 1"/>
+  <img src="asset/courbe2.png" width="48%" alt="Training curves, plot 2"/>
+</p>
 
 ### 4. Inference
 
-Inference runs automatically at the end of `main.py`, or directly from the saved artifact:
-
-```python
-# In main.py:
-INFERENCE_ONLY_FROM_FINAL_MODEL = True
-INFER_PROMPT = "Hello, I am a language model"
-INFER_MAX_NEW_TOKENS = 80
-INFER_TEMPERATURE = 0.9
-INFER_TOP_K = 20
-```
-
-At the end of the run, an **interactive reprompt mode** lets you test multiple prompts without restarting the pipeline:
+Inference runs at the end of `main.py`, or on its own from the saved model by setting `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. An interactive reprompt mode then lets you test several prompts without restarting the pipeline:
 
 ```
 [main] reprompt mode active
@@ -355,200 +172,409 @@ prompt> :quit
 
 ---
 
-## 🎛️ Hyperparameters
+## Configuration
 
-All key parameters are centralized in `main.py`. `WARMUP_STEPS` is computed automatically as 2% of total steps at runtime.
+All parameters are centralized in `main.py` unless stated otherwise. Warmup is computed at runtime as `WARMUP_RATIO` of the total number of optimizer steps.
 
-| Parameter              | Default           | Description                          |
-|------------------------|-------------------|--------------------------------------|
-| `VOCAB_SIZE`           | `30 000`          | BPE vocabulary size                  |
-| `EMBEDDING_DIM`        | `384`             | Embedding dimension                  |
-| `NUM_HEADS`            | `8`               | Attention heads                      |
-| `NUM_BLOCKS`           | `4`               | Transformer blocks                   |
-| `SEQ_LENGTH`           | `256`             | Sequence length                      |
-| `BATCH_SIZE`           | `8`               | Batch size per step                  |
-| `GRAD_ACCUM_STEPS`     | `4`               | Effective batch = 8 x 4 = **32**     |
-| `LEARNING_RATE`        | `1e-4`            | Peak learning rate                   |
-| `WEIGHT_DECAY`         | `0.01`            | L2 penalty (AdamW)                   |
-| `EPOCHS`               | `3`               | Number of epochs                     |
-| `WARMUP_STEPS`         | `~2% of total`    | Auto-computed linear warmup          |
-| `LABEL_SMOOTHING`      | `0.1`             | Reduces overconfidence               |
-| `Z_LOSS_WEIGHT`        | `1e-4`            | Logit stabilization (z-loss)         |
-| `USE_AMP`              | `True`            | Mixed precision (float16 on GPU)     |
-| `CHECKPOINT_EVERY`     | `500`             | Async checkpoint frequency (steps)   |
+**Model**
 
----
+| Parameter | Default | Description |
+|---|---|---|
+| `VOCAB_SIZE` | 16 000 | BPE vocabulary size |
+| `EMBEDDING_DIM` | 384 | Embedding dimension |
+| `NUM_HEADS` | 8 | Attention heads |
+| `NUM_BLOCKS` | 4 | Transformer blocks |
+| `SEQ_LENGTH` | 256 | Context length |
+| `dropout` | 0.1 | Dropout rate |
+| Total parameters | about 18.7M | `small` configuration |
 
-## ⚡ Technical Optimizations
+**Training**
 
-### BPE Tokenizer
+| Parameter | Default | Description |
+|---|---|---|
+| `BATCH_SIZE_CUDA` / `BATCH_SIZE_CPU` | 32 / 8 | Batch size per micro-step |
+| `GRAD_ACCUM_STEPS_CUDA` / `GRAD_ACCUM_STEPS_CPU` | 2 / 4 | Effective batch size: 64 on GPU, 32 on CPU |
+| `LEARNING_RATE` | 3e-4 | Peak learning rate (cosine decay) |
+| `WEIGHT_DECAY` | 0.1 | AdamW, applied to 2D weights only |
+| `EPOCHS` | 3 | Number of epochs |
+| `WARMUP_RATIO` | 0.02 | Linear warmup, 2% of optimizer steps |
+| `LABEL_SMOOTHING` | 0.1 | Reduces overconfidence |
+| `Z_LOSS_WEIGHT` | 1e-4 | Logit stabilization |
+| `USE_AMP` | True | Mixed precision (float16 on GPU) |
+| `CHECKPOINT_EVERY` | 500 | Asynchronous checkpoint frequency, in steps |
+| `RESUME_FROM_CHECKPOINT` | True | Resume from the last checkpoint |
 
-| Problem | Solution |
-|---|---|
-| `count_pairs()` O(N x V) naive | **Incremental counting** — only neighboring pairs of the merged token are updated |
-| `most_frequent_pair()` O(P) | **Max-heap** with lazy deletion → O(log P) |
-| Slow `encode_corpus()` | **Word→ids cache** + compact `array('i')` buffer |
+**Inference**
 
-### Attention
+| Parameter | Default | Description |
+|---|---|---|
+| `INFERENCE_ONLY_FROM_FINAL_MODEL` | False | Skip training and load the final model |
+| `INFER_PROMPT` | custom | Starting prompt |
+| `INFER_MAX_NEW_TOKENS` | 80 | Maximum generated tokens |
+| `INFER_TEMPERATURE` | 0.9 | Sampling temperature |
+| `INFER_TOP_K` | 20 | Top-k sampling |
 
-- **Flash Attention** via `F.scaled_dot_product_attention`: avoids materializing the [B, H, T, T] score matrix — 2-4x less VRAM
-- **KV Cache**: during decode, only the current token is projected (T=1), past K/V come from cache → O(1) per token
-- **`is_causal` fix**: set to `False` during decode (when `past_kv is not None`) — otherwise the entire KV cache is masked out and ignored
+**Data** (command-line options)
 
-### Training Loop
-
-- **AMP float16** on GPU with `GradScaler` for numerical stability
-- **Gradient accumulation**: large effective batch without saturating VRAM
-- **Async checkpoints**: disk writes happen in a daemon thread — training is never blocked by I/O
-- **Deferred `loss.item()`**: no GPU→CPU sync at every step, only at `log_interval`
-- **Fused AdamW** kernel (PyTorch ≥ 2.0) + separate decay/no-decay parameter groups
-- **Cosine LR decay** with linear warmup auto-computed from dataset size
-
-### Dataset & Corpus
-
-- **Sentence-aware chunking**: no sentence is ever cut mid-way
-- **Jaccard 8-gram near-dedup**: catches paraphrases and overlapping chunks without external dependencies
-- **Streaming encoding**: the JSONL corpus is never fully loaded into RAM
-- **Memory-mapped binary cache**: `uint32`, 4 bytes/token, loaded via `torch.from_file`
+| Option | Value | Description |
+|---|---|---|
+| `--chunk-size` | 700 | Chunk size, in words |
+| `--chunk-overlap` | 0 | Overlap between chunks |
+| `--min-chars` | 180 | Minimum chunk length, in characters |
+| `--near-dup-threshold` | 0.8 | Jaccard similarity threshold for near-duplicates |
+| `--remove-short` | 100 | Remove pages under 100 words (`clean_db.py`) |
+| `--commit-every` / `--progress-every` | 200 / 250 | Commit and progress frequency for large ZIM ingestion |
 
 ---
 
-## 🗺️ Roadmap
+## Technical optimizations
 
-- [x] **Phase 1** — BPE tokenizer from scratch (heap-optimized)
-- [x] **Phase 2** — Async web crawler + local ingest (ZIM/PDF/TXT)
-- [x] **Phase 3** — Dataset builder (sentence-aware chunking, near-dedup)
-- [x] **Phase 4** — Embedding layer (token + position, sparse gradients)
-- [x] **Phase 5** — Self-Attention + Flash Attention + KV Cache
-- [x] **Phase 6** — Transformer Block (pre-norm, GELU MLP)
-- [x] **Phase 7** — Full GPT model (weight tying, GPT-2 scaled init)
-- [x] **Phase 8** — Training loop (AMP, grad accum, async checkpoints)
-- [x] **Phase 9** — Text generation (top-k, temperature, reprompt mode)
-- [ ] **Phase 10** — Evaluation (perplexity curves, BLEU, human eval)
-- [ ] **Phase 11** — Scaling (larger dataset, medium model ~50M params)
-- [ ] **Phase 12** — Flash Attention v2, gradient checkpointing, extended KV cache
+| Area | Technique | Benefit |
+|---|---|---|
+| BPE tokenizer | Incremental pair counting, max-heap with lazy deletion, word-to-ids cache | Fast training and encoding without the naive O(N x V) pair count |
+| Attention | Flash Attention (`sdpa`), KV cache, `is_causal` disabled during decode | 2-4x less VRAM, no recomputation of past tokens |
+| Training | Mixed precision with `GradScaler`, gradient accumulation, fused AdamW with decay/no-decay groups, cosine schedule with warmup | Stable training and a large effective batch on limited VRAM |
+| I/O | Asynchronous checkpoints in a daemon thread, deferred `loss.item()` | No blocking on disk writes or GPU-CPU sync |
+| Data | Sentence-aware chunking, Jaccard near-dedup, streaming encoding, memory-mapped binary cache (`int32`) | Corpus never fully loaded in RAM |
+
+The `is_causal` flag must be `False` during decode (when `past_kv is not None`), otherwise the whole KV cache is masked out and ignored.
 
 ---
 
-## 📚 Resources
+## Project structure
 
-### Foundational papers
+```
+Portr-AI/
+├── main.py                  # Pipeline entry point and configuration
+├── data/                    # Dataset (sliding windows), SQLite storage, clean corpus
+├── tokenizer/               # BPE from scratch and saved model
+├── model/                   # Embedding, attention, transformer block, GPT model
+├── training/                # Training loop, loss, optimizer
+├── inference/               # Text generation with KV cache
+├── artifacts/               # Checkpoints, final model, binary token cache
+├── asset/                   # README images
+├── ingest_local.py          # Local file ingestion
+├── build_clean_dataset.py   # Clean dataset builder
+└── clean_db.py              # Database audit and cleanup
+```
+
+---
+
+## Roadmap
+
+- [x] BPE tokenizer from scratch (heap-optimized)
+- [x] Data pipeline: collection, cleaning, near-deduplication
+- [x] GPT model: embeddings, attention with KV cache, Transformer blocks
+- [x] Training loop: mixed precision, gradient accumulation, async checkpoints
+- [x] Text generation: top-k, temperature, reprompt mode
+- [ ] Evaluation: perplexity curves, BLEU, human evaluation
+- [ ] Scaling: larger dataset, medium model of about 50M parameters
+- [ ] Advanced optimizations: Flash Attention v2, gradient checkpointing, extended KV cache
+
+---
+
+## References
+
+**Foundational papers**
 
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762) — Vaswani et al.
 - [Language Models are Unsupervised Multitask Learners](https://openai.com/research/better-language-models) — GPT-2 paper
 - [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) — Jay Alammar
 
-### BPE tokenization
+**BPE tokenization**
 
 - [BPE from Scratch](https://sebastianraschka.com/blog/2025/bpe-from-scratch.html) — Sebastian Raschka
 - [BPE explained (video)](https://youtu.be/VrZTHO1E76w)
 
-### Full project documentation
+---
 
-[![Documentation](https://img.shields.io/badge/📖_Wiki_Portr--AI-por--tra.github.io-4A90D9?style=for-the-badge&logo=github)](https://por-tra.github.io/Portr-AI-DOC/)
+## Author and license
+
+**Lucas** — personal project to learn and implement a French-language LLM from scratch. Released under the MIT License.
+
+<br/>
 
 ---
 
----
-
-## 🇫🇷 Version française
+<a id="francais"></a>
 
 <div align="center">
 
-### **Un LLM GPT français, implémenté from scratch**
-*Comprendre chaque rouage — du corpus brut à la génération de texte*
+<h1>Version française</h1>
+
+**Un modèle de langage de type GPT en français, construit from scratch**
+
+Chaque composant est implémenté à la main, du corpus brut à la génération de texte.
+
+[English](#english) | [Français](#francais)
 
 </div>
 
-> 🇬🇧 [English version above](#-overview)
+---
+
+## Présentation
+
+**Portr-AI** est un modèle de langage auto-régressif de type GPT pour le français, écrit from scratch en Python et PyTorch. Il n'utilise ni poids pré-entraînés, ni bibliothèque de modèles de haut niveau.
+
+L'objectif est pédagogique et technique : implémenter chaque brique d'un modèle de langage Transformer, de la tokenisation BPE à l'entraînement sur GPU et à la génération de texte.
+
+- Pipeline complet : collecte, nettoyage, tokenisation, entraînement, inférence
+- Tokenizer BPE maison, optimisé avec un max-heap
+- Transformer decoder-only avec Flash Attention et KV cache
+- Entraînement reprenable, en précision mixte, avec checkpoints asynchrones
+
+Les sources de données, le tokenizer et les filtres de qualité sont configurés pour le français. Le pipeline peut être adapté à une autre langue en modifiant les sources de données et les paramètres du tokenizer.
+
+> [!NOTE]
+> **État du projet.** Le pipeline est complet et fonctionnel, mais il n'a pas pu être exécuté sur le dataset complet à cause de contraintes matérielles (VRAM GPU, temps d'entraînement). Le calcul est le seul facteur limitant.
+
+**Sommaire :** [Chaîne de traitement](#chaîne-de-traitement) · [Architecture du modèle](#architecture-du-modèle) · [Prérequis et installation](#prérequis-et-installation) · [Utilisation](#utilisation) · [Paramètres](#paramètres) · [Optimisations techniques](#optimisations-techniques) · [Structure du projet](#structure-du-projet) · [Feuille de route](#feuille-de-route) · [Références](#références)
 
 ---
 
-## Vue d'ensemble
+## Chaîne de traitement
 
-**Portr-AI** est un modèle de langage auto-régressif de type GPT, construit entièrement **from scratch en Python/PyTorch**, sans utilisation d'aucun modèle pré-entraîné.
+```mermaid
+flowchart LR
+    A["Collecte<br/>sources web et locales"] --> B["Nettoyage<br/>découpage, dédoublonnage"]
+    B --> C["Tokenisation<br/>BPE from scratch"]
+    C --> D["Entraînement<br/>AdamW, AMP, checkpoints"]
+    D --> E["Inférence<br/>KV cache, échantillonnage top-k"]
+```
 
-L'objectif est pédagogique et technique : **maîtriser chaque brique** de l'architecture Transformer, de la tokenisation BPE jusqu'à la génération de texte, en passant par l'entraînement sur GPU.
-
-> 💡 Le modèle est orienté **corpus francophone**. Le pipeline peut être adapté à d'autres langues en modifiant les sources de données et les paramètres du tokenizer.
-
-> **Note :** Le projet n'a pas pu être testé à 100% sur le dataset complet à cause de contraintes matérielles (VRAM GPU, temps d'entraînement). Le pipeline est complet et fonctionnel — le compute est le seul facteur limitant.
+| Étape | Rôle | Sortie |
+|---|---|---|
+| Collecte | Rassemble le texte brut dans une base SQLite | `crawler.db` |
+| Nettoyage | Découpage par phrases et suppression des quasi-doublons | `dataset.jsonl` |
+| Tokenisation | Entraîne le modèle BPE et encode le corpus dans un cache binaire | `bpe_model.json` |
+| Entraînement | Prédiction du token suivant sur fenêtres glissantes | checkpoints, modèle final |
+| Inférence | Génération auto-régressive avec KV cache | texte généré |
 
 ---
 
-## Installation
+## Architecture du modèle
 
-### Prérequis
+```mermaid
+flowchart TB
+    T["Tokens en entrée<br/>[batch, seq_length]"] --> E["Embedding de tokens + positions<br/>dropout"]
+    E --> B
+    subgraph B["Bloc Transformer, répété N fois"]
+        direction TB
+        N1["Pre-LayerNorm"] --> A["Attention multi-têtes causale<br/>Flash Attention, KV cache<br/>+ résiduel"]
+        A --> N2["Pre-LayerNorm"] --> M["MLP avec GELU<br/>+ résiduel"]
+    end
+    B --> F["LayerNorm finale"]
+    F --> O["Projection de sortie<br/>liée à l'embedding de tokens"]
+    O --> L["Logits<br/>[batch, seq_length, vocab_size]"]
+```
 
-- Python **3.10+**
-- CUDA (optionnel, fortement recommandé pour l'entraînement)
-- ~6 Go de RAM minimum, 16+ Go recommandés
+- GPT decoder-only avec auto-attention causale et blocs en pre-LayerNorm
+- Tête de sortie partageant ses poids avec l'embedding de tokens
+- Flash Attention via `scaled_dot_product_attention`, et KV cache au décodage
+- Initialisation mise à l'échelle, comme GPT-2
+
+Les tailles du modèle sont indiquées dans [Paramètres](#paramètres).
+
+---
+
+## Prérequis et installation
+
+**Prérequis :** Python 3.10+, CUDA (optionnel mais fortement recommandé pour l'entraînement), environ 6 Go de RAM au minimum et 16 Go ou plus recommandés.
 
 ```bash
 git clone https://github.com/Por-tra/Portr-AI.git
 cd Portr-AI
 python -m venv .venv
 .venv\Scripts\activate           # Windows
-# ou
 source .venv/bin/activate        # Linux/macOS
-
 pip install -r requirements.txt
+```
+
+Pour l'entraînement sur GPU, installer PyTorch avec la commande officielle correspondant à votre version de CUDA, par exemple CUDA 12.1 :
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+Support optionnel des PDF et des ZIM Wikipedia :
+
+```bash
+pip install pdfminer.six libzim
 ```
 
 ---
 
-## Utilisation rapide
+## Utilisation
 
-### Collecte de données
+### 1. Collecte de données
+
+Le texte brut provient d'un crawler web asynchrone (`crawl.py`) et de fichiers locaux (`ingest_local.py` : PDF, TXT, Markdown, ZIM Wikipedia).
 
 ```bash
-# Crawler web
-python crawl.py --url https://example.com --max-pages 5000
-
-# Fichiers locaux (PDF, TXT, ZIM Wikipedia)
-python ingest_local.py --files document.pdf
+python crawl.py --url https://example.com
 python ingest_local.py --dir ./mes_documents -r
+python ingest_local.py --files wikipedia_fr.zim     # Wikipedia FR complète (Kiwix), plusieurs heures possibles
 ```
 
-### Nettoyage du dataset
+### 2. Nettoyage et prétraitement
 
 ```bash
-python clean_db.py --all
-python build_clean_dataset.py --chunk-size 700 --chunk-overlap 0
+python clean_db.py --stats          # statistiques de la base
+python clean_db.py --all            # nettoyage complet et export
+python build_clean_dataset.py       # construction du dataset propre
 ```
 
-### Entraînement
+Le découpage respecte les phrases (aucune coupure en milieu de phrase) et les quasi-doublons sont détectés par empreintes de 8-grammes (similarité de Jaccard). Les seuils sont indiqués dans [Paramètres](#paramètres).
+
+### 3. Entraînement
 
 ```bash
 python main.py
 ```
 
-Le pipeline interactif propose de choisir le mode tokenizer et le mode cache. L'entraînement reprend automatiquement depuis le dernier checkpoint.
+Le pipeline interactif demande :
 
-### Inférence
+- le mode du tokenizer : `auto`, `use_existing` ou `retrain`
+- le mode du cache d'encodage : `auto`, `use_precomputed` ou `recompute`
 
-```python
-# Dans main.py :
-INFERENCE_ONLY_FROM_FINAL_MODEL = True
-INFER_PROMPT = "Bonjour, je suis un modèle de langage"
-INFER_MAX_NEW_TOKENS = 80
+L'entraînement reprend automatiquement depuis le dernier checkpoint si `RESUME_FROM_CHECKPOINT = True`. Les courbes (loss, perplexité, learning rate) sont sauvegardées dans `artifacts/` et visualisables avec TensorBoard.
+
+<p align="center">
+  <img src="asset/courbe.png" width="48%" alt="Courbes d'entraînement, graphique 1"/>
+  <img src="asset/courbe2.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>
+</p>
+
+### 4. Inférence
+
+L'inférence s'exécute à la fin de `main.py`, ou seule à partir du modèle sauvegardé en réglant `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. Un mode interactif permet ensuite de tester plusieurs prompts sans relancer le pipeline :
+
+```
+[main] reprompt mode active
+prompt> Raconte-moi une histoire
+[reprompt] tokens: 52
+[reprompt] text: Raconte-moi une histoire sur un vieux château...
+
+prompt> :quit
 ```
 
 ---
 
-## Optimisations clés
+## Paramètres
 
-| Composant | Optimisation |
-|---|---|
-| Tokenizer BPE | Comptage incrémental + heap max + cache word→ids |
-| Attention | Flash Attention (sdpa) + KV Cache O(1) + fix `is_causal` en decode |
-| Training | AMP float16 + grad accum + checkpoints async + `loss.item()` différé |
-| Dataset | Chunking phrase-aware + near-dedup Jaccard + cache binaire mémoire-mappé |
+Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. Le warmup est calculé à l'exécution comme `WARMUP_RATIO` du nombre total de pas d'optimisation.
+
+**Modèle**
+
+| Paramètre | Valeur par défaut | Description |
+|---|---|---|
+| `VOCAB_SIZE` | 16 000 | Taille du vocabulaire BPE |
+| `EMBEDDING_DIM` | 384 | Dimension des embeddings |
+| `NUM_HEADS` | 8 | Têtes d'attention |
+| `NUM_BLOCKS` | 4 | Blocs Transformer |
+| `SEQ_LENGTH` | 256 | Longueur du contexte |
+| `dropout` | 0.1 | Taux de dropout |
+| Paramètres totaux | environ 18,7 M | Configuration `small` |
+
+**Entraînement**
+
+| Paramètre | Valeur par défaut | Description |
+|---|---|---|
+| `BATCH_SIZE_CUDA` / `BATCH_SIZE_CPU` | 32 / 8 | Taille de batch par micro-pas |
+| `GRAD_ACCUM_STEPS_CUDA` / `GRAD_ACCUM_STEPS_CPU` | 2 / 4 | Batch effectif : 64 sur GPU, 32 sur CPU |
+| `LEARNING_RATE` | 3e-4 | Learning rate maximal (décroissance cosinus) |
+| `WEIGHT_DECAY` | 0.1 | AdamW, appliqué aux poids 2D uniquement |
+| `EPOCHS` | 3 | Nombre d'epochs |
+| `WARMUP_RATIO` | 0.02 | Warmup linéaire, 2 % des pas d'optimisation |
+| `LABEL_SMOOTHING` | 0.1 | Réduit la sur-confiance |
+| `Z_LOSS_WEIGHT` | 1e-4 | Stabilisation des logits |
+| `USE_AMP` | True | Précision mixte (float16 sur GPU) |
+| `CHECKPOINT_EVERY` | 500 | Fréquence des checkpoints asynchrones, en pas |
+| `RESUME_FROM_CHECKPOINT` | True | Reprise depuis le dernier checkpoint |
+
+**Inférence**
+
+| Paramètre | Valeur par défaut | Description |
+|---|---|---|
+| `INFERENCE_ONLY_FROM_FINAL_MODEL` | False | Saute l'entraînement et charge le modèle final |
+| `INFER_PROMPT` | personnalisé | Prompt de départ |
+| `INFER_MAX_NEW_TOKENS` | 80 | Nombre maximal de tokens générés |
+| `INFER_TEMPERATURE` | 0.9 | Température d'échantillonnage |
+| `INFER_TOP_K` | 20 | Échantillonnage top-k |
+
+**Données** (options en ligne de commande)
+
+| Option | Valeur | Description |
+|---|---|---|
+| `--chunk-size` | 700 | Taille des chunks, en mots |
+| `--chunk-overlap` | 0 | Chevauchement entre chunks |
+| `--min-chars` | 180 | Longueur minimale d'un chunk, en caractères |
+| `--near-dup-threshold` | 0.8 | Seuil de similarité de Jaccard pour les quasi-doublons |
+| `--remove-short` | 100 | Supprime les pages de moins de 100 mots (`clean_db.py`) |
+| `--commit-every` / `--progress-every` | 200 / 250 | Fréquence de commit et d'affichage pour les gros ZIM |
 
 ---
 
-## Auteur
+## Optimisations techniques
 
-**Lucas** — Projet personnel d'apprentissage et d'implémentation from scratch d'un LLM en français.
+| Domaine | Technique | Bénéfice |
+|---|---|---|
+| Tokenizer BPE | Comptage incrémental des paires, max-heap avec suppression paresseuse, cache mot vers ids | Entraînement et encodage rapides, sans le comptage naïf en O(N x V) |
+| Attention | Flash Attention (`sdpa`), KV cache, `is_causal` désactivé au décodage | 2 à 4 fois moins de VRAM, aucun recalcul du passé |
+| Entraînement | Précision mixte avec `GradScaler`, accumulation de gradients, AdamW fusionné avec groupes decay/no-decay, schedule cosinus avec warmup | Entraînement stable et grand batch effectif malgré une VRAM limitée |
+| E/S | Checkpoints asynchrones dans un thread daemon, `loss.item()` différé | Pas de blocage sur les écritures disque ni de synchronisation GPU-CPU |
+| Données | Découpage par phrases, quasi-dédoublonnage Jaccard, encodage en streaming, cache binaire mémoire-mappé (`int32`) | Corpus jamais chargé entièrement en RAM |
 
-[![Documentation](https://img.shields.io/badge/📖_Documentation-por--tra.github.io-4A90D9?style=flat-square)](https://por-tra.github.io/Portr-AI-DOC/)
+Le flag `is_causal` doit être à `False` au décodage (quand `past_kv is not None`), sinon tout le KV cache est masqué et ignoré.
+
+---
+
+## Structure du projet
+
+```
+Portr-AI/
+├── main.py                  # Point d'entrée du pipeline et configuration
+├── data/                    # Dataset (fenêtres glissantes), stockage SQLite, corpus propre
+├── tokenizer/               # BPE from scratch et modèle sauvegardé
+├── model/                   # Embedding, attention, bloc Transformer, modèle GPT
+├── training/                # Boucle d'entraînement, loss, optimiseur
+├── inference/               # Génération de texte avec KV cache
+├── artifacts/               # Checkpoints, modèle final, cache binaire de tokens
+├── asset/                   # Images du README
+├── ingest_local.py          # Ingestion de fichiers locaux
+├── build_clean_dataset.py   # Construction du dataset propre
+└── clean_db.py              # Audit et nettoyage de la base
+```
+
+---
+
+## Feuille de route
+
+- [x] Tokenizer BPE from scratch (optimisé avec un heap)
+- [x] Pipeline de données : collecte, nettoyage, quasi-dédoublonnage
+- [x] Modèle GPT : embeddings, attention avec KV cache, blocs Transformer
+- [x] Boucle d'entraînement : précision mixte, accumulation de gradients, checkpoints asynchrones
+- [x] Génération de texte : top-k, température, mode reprompt
+- [ ] Évaluation : courbes de perplexité, BLEU, évaluation humaine
+- [ ] Passage à l'échelle : dataset plus grand, modèle moyen d'environ 50 M de paramètres
+- [ ] Optimisations avancées : Flash Attention v2, gradient checkpointing, KV cache étendu
+
+---
+
+## Références
+
+**Articles fondateurs**
+
+- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) — Vaswani et al.
+- [Language Models are Unsupervised Multitask Learners](https://openai.com/research/better-language-models) — article GPT-2
+- [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) — Jay Alammar
+
+**Tokenisation BPE**
+
+- [BPE from Scratch](https://sebastianraschka.com/blog/2025/bpe-from-scratch.html) — Sebastian Raschka
+- [BPE expliqué (vidéo)](https://youtu.be/VrZTHO1E76w)
+
+---
+
+## Auteur et licence
+
+**Lucas** — projet personnel d'apprentissage et d'implémentation from scratch d'un LLM en français. Publié sous licence MIT.

@@ -65,9 +65,9 @@ except ImportError:
     _HAS_PDFMINER = False
 
 
-# ---------------------------------------------------------------------------
-# Helpers de filtrage
-# ---------------------------------------------------------------------------
+#* ---------------------------------------------------------------------------
+#*                          Helpers de filtrage
+#* ---------------------------------------------------------------------------
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
@@ -100,9 +100,10 @@ def _is_pdf_url(url: str) -> bool:
     return path.endswith(".pdf")
 
 
-# ---------------------------------------------------------------------------
-# Extraction PDF
-# ---------------------------------------------------------------------------
+
+#* ---------------------------------------------------------------------------
+#*                              Extraction PDF
+#* ---------------------------------------------------------------------------
 
 def _extract_pdf_text(data: bytes, url: str) -> Tuple[str, str]:
     """
@@ -124,9 +125,10 @@ def _extract_pdf_text(data: bytes, url: str) -> Tuple[str, str]:
         return "", ""
 
 
-# ---------------------------------------------------------------------------
-# Signatures CAPTCHA
-# ---------------------------------------------------------------------------
+
+#* ---------------------------------------------------------------------------
+#*                              Signatures CAPTCHA
+#* ---------------------------------------------------------------------------
 
 _CAPTCHA_SIGNALS = [
     "cf-browser-verification", "cf_clearance", "checking your browser",
@@ -134,7 +136,7 @@ _CAPTCHA_SIGNALS = [
     "recaptcha", "hcaptcha.com", "www.google.com/recaptcha",
     "captcha", "robot check", "are you a robot", "i am not a robot",
     "verify you are human", "please verify", "access denied",
-    "ddos-guard", "datadome",
+    "ddos-guard", "datadome"
 ]
 
 def _is_captcha_page(html: str) -> bool:
@@ -142,9 +144,10 @@ def _is_captcha_page(html: str) -> bool:
     return any(sig in lower for sig in _CAPTCHA_SIGNALS)
 
 
-# ---------------------------------------------------------------------------
-# Extraction HTML
-# ---------------------------------------------------------------------------
+
+#* ---------------------------------------------------------------------------
+#*                              Extraction HTML
+#* ---------------------------------------------------------------------------
 
 def _extract_main_content(html: str, url: str) -> Tuple[str, str]:
     title = ""
@@ -154,7 +157,7 @@ def _extract_main_content(html: str, url: str) -> Tuple[str, str]:
         extracted = trafilatura.extract(
             html, url=url,
             include_comments=False, include_tables=True,
-            no_fallback=False, favor_precision=True,
+            no_fallback=False, favor_precision=True
         )
         content = extracted or ""
         soup = BeautifulSoup(html, "lxml")
@@ -164,8 +167,7 @@ def _extract_main_content(html: str, url: str) -> Tuple[str, str]:
         soup = BeautifulSoup(html, "lxml")
         t = soup.find("title")
         title = t.get_text(strip=True) if t else ""
-        for tag in soup(["script", "style", "noscript", "nav", "footer",
-                         "header", "aside", "form", "button", "svg", "iframe"]):
+        for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "aside", "form", "button", "svg", "iframe"]):
             tag.decompose()
         body = soup.find("body")
         raw = (body or soup).get_text(separator=" ", strip=True)
@@ -174,9 +176,10 @@ def _extract_main_content(html: str, url: str) -> Tuple[str, str]:
     return title, content
 
 
-# ---------------------------------------------------------------------------
-# Headers navigateur réalistes
-# ---------------------------------------------------------------------------
+
+#* ---------------------------------------------------------------------------
+#*                       Headers navigateur réalistes
+#* ---------------------------------------------------------------------------
 
 _BROWSER_HEADERS = [
     {
@@ -189,7 +192,7 @@ _BROWSER_HEADERS = [
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
+        "Cache-Control": "max-age=0"
     },
     {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -200,14 +203,14 @@ _BROWSER_HEADERS = [
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "cross-site",
-        "Sec-Fetch-User": "?1",
+        "Sec-Fetch-User": "?1"
     },
 ]
 
 
-# ---------------------------------------------------------------------------
-# Rotateurs User-Agent / Proxy
-# ---------------------------------------------------------------------------
+#* ---------------------------------------------------------------------------
+#*                          Rotateurs User-Agent / Proxy
+#* ---------------------------------------------------------------------------
 
 class _UARotator:
     _DEFAULTS = [
@@ -215,7 +218,7 @@ class _UARotator:
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 "
         "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0"
     ]
 
     def __init__(self, user_agents: list):
@@ -262,9 +265,9 @@ class _ProxyRotator:
             self._blocked_until[proxy or "__direct__"] = time.time() + self._cooldown
 
 
-# ---------------------------------------------------------------------------
-# Throttling par domaine
-# ---------------------------------------------------------------------------
+#* ---------------------------------------------------------------------------
+#*                      Throttling par domaine
+#* ---------------------------------------------------------------------------
 
 class _DomainThrottler:
     def __init__(self, delay: float, jitter_ratio: float = 0.5):
@@ -298,9 +301,10 @@ class _DomainThrottler:
             self._last_req[domain] = time.time()
 
 
-# ---------------------------------------------------------------------------
-# FetchResult
-# ---------------------------------------------------------------------------
+
+#* ---------------------------------------------------------------------------
+#*                                  FetchResult
+#* ---------------------------------------------------------------------------
 
 class _FetchResult:
     """Résultat d'un fetch : contenu brut + type détecté."""
@@ -313,9 +317,9 @@ class _FetchResult:
         self.is_pdf = pdf_bytes is not None
 
 
-# ---------------------------------------------------------------------------
-# WebCrawler
-# ---------------------------------------------------------------------------
+#* ---------------------------------------------------------------------------
+#*                              WebCrawler
+#* ---------------------------------------------------------------------------
 
 class WebCrawler:
     """Crawler web BFS asynchrone avec pipeline de qualité pour dataset LLM."""
@@ -334,7 +338,7 @@ class WebCrawler:
             "visited": 0, "requests": 0, "blocked": 0, "errors": 0,
             "saved": 0, "saved_pdf": 0,
             "skipped_url": 0, "skipped_dup": 0,
-            "skipped_lang": 0, "skipped_quality": 0,
+            "skipped_lang": 0, "skipped_quality": 0
         }
 
         self._jsonl_file = None
@@ -344,11 +348,11 @@ class WebCrawler:
         self._ua_rot = _UARotator(config.get("user_agents", []))
         self._proxy_rot = _ProxyRotator(
             config.get("proxies", []),
-            cooldown=config.get("proxy_cooldown", 60.0),
+            cooldown=config.get("proxy_cooldown", 60.0)
         )
         self._throttler = _DomainThrottler(
             delay=config.get("politeness_delay", 0.3),
-            jitter_ratio=config.get("jitter_ratio", 0.5),
+            jitter_ratio=config.get("jitter_ratio", 0.5)
         )
 
         self._site_pages_start: int = 0
@@ -357,9 +361,9 @@ class WebCrawler:
         self.visited_lock: Optional[asyncio.Lock] = None
         self.stats_lock: Optional[asyncio.Lock] = None
 
-    # ------------------------------------------------------------------
-    # Logging
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Logging
+    #* ------------------------------------------------------------------
 
     def log(self, message: str, level: str = "INFO"):
         if level in ("WARN", "ERROR", "SUCCESS"):
@@ -388,22 +392,28 @@ class WebCrawler:
                     "bloqués": self.stats["blocked"],
                     "erreurs": self.stats["errors"],
                     "dup": self.stats["skipped_dup"],
-                    "pdf": self.stats["saved_pdf"],
+                    "pdf": self.stats["saved_pdf"]
                 }, refresh=True)
 
-    # ------------------------------------------------------------------
-    # Réseau
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Réseau
+    #* ------------------------------------------------------------------
 
     async def _count_request(self):
         async with self.stats_lock:
             self.stats["requests"] += 1
 
-    async def fetch(self, session: aiohttp.ClientSession, url: str,
-                    max_retries: int = 3) -> Optional[_FetchResult]:
-        """
-        GET avec retry + backoff exponentiel.
+    async def fetch(self, session: aiohttp.ClientSession, url: str, max_retries: int = 3) -> Optional[_FetchResult]:
+        """GET avec retry + backoff exponentiel.
         Retourne un _FetchResult (HTML ou PDF bytes) ou None si échec.
+
+        Args:
+            session (aiohttp.ClientSession): Session HTTP asynchrone.
+            url (str): URL à fetcher.
+            max_retries (int, optional): Nombre maximum de tentatives. Defaults to 3.
+
+        Returns:
+            Optional[_FetchResult]: Résultat du fetch ou None si échec.
         """
         extract_pdf = self.config.get("extract_pdf", True)
 
@@ -412,7 +422,7 @@ class WebCrawler:
             proxy = await self._proxy_rot.get()
             headers = self._ua_rot.get_headers()
 
-            # Pour les PDF, on accepte aussi application/pdf
+            #& Pour les PDF, on accepte aussi application/pdf
             if _is_pdf_url(url) and extract_pdf:
                 headers["Accept"] = "application/pdf,*/*;q=0.8"
 
@@ -423,7 +433,7 @@ class WebCrawler:
                     timeout=aiohttp.ClientTimeout(total=20),
                     proxy=proxy,
                     headers=headers,
-                    allow_redirects=True,
+                    allow_redirects=True
                 ) as resp:
 
                     if resp.status in (403, 429):
@@ -453,20 +463,15 @@ class WebCrawler:
 
                     content_type = resp.headers.get("content-type", "").lower()
 
-                    # -- PDF ------------------------------------------
-                    if extract_pdf and (
-                        "application/pdf" in content_type or _is_pdf_url(url)
-                    ):
+                    #&  PDF 
+                    if extract_pdf and ("application/pdf" in content_type or _is_pdf_url(url)):
                         if not _HAS_PDFMINER:
-                            self.log(
-                                "[WARN] pdfminer.six absent — PDF ignoré. "
-                                "pip install pdfminer.six", "WARN"
-                            )
+                            self.log("[WARN] pdfminer.six absent — PDF ignoré. \npip install pdfminer.six", "WARN")
                             return None
                         pdf_bytes = await resp.read()
                         return _FetchResult(pdf_bytes=pdf_bytes)
 
-                    # -- HTML -----------------------------------------
+                    #&  HTML
                     if resp.status == 200 and "text/html" in content_type:
                         html = await resp.text()
                         if _is_captcha_page(html):
@@ -498,9 +503,9 @@ class WebCrawler:
 
         return None
 
-    # ------------------------------------------------------------------
-    # Extraction des liens
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Extraction des liens
+    #* ------------------------------------------------------------------
 
     def extract_links(self, base_url: str, html: str) -> set:
         soup = BeautifulSoup(html, "lxml")
@@ -519,7 +524,7 @@ class WebCrawler:
                 continue
             if stay_on_domain and parsed.netloc and base_domain not in parsed.netloc:
                 continue
-            # Conserver les PDF si extraction activée, sinon filtrer
+            #& Conserver les PDF si extraction activée, sinon filtrer
             if _is_pdf_url(link) and not extract_pdf:
                 continue
             clean = link.split("#")[0].rstrip("/") or link
@@ -527,9 +532,9 @@ class WebCrawler:
 
         return links
 
-    # ------------------------------------------------------------------
-    # Pipeline de qualité
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Pipeline de qualité
+    #* ------------------------------------------------------------------
 
     def _passes_pipeline(self, url: str, content: str) -> Tuple[bool, str]:
         cfg = self.config
@@ -558,52 +563,68 @@ class WebCrawler:
             self._jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._jsonl_file.flush()
 
-    # ------------------------------------------------------------------
-    # Sauvegarde commune HTML + PDF
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Sauvegarde commune HTML + PDF
+    #* ------------------------------------------------------------------
 
-    def _save_page(self, url: str, title: str, content: str,
-                   depth: int, links: set, source: str = "html") -> bool:
-        """Déduplication + qualité + insert DB + JSONL. Retourne True si sauvé."""
+    def _save_page(self, url: str, title: str, content: str, depth: int, links: set, source: str = "html") -> bool:
+        """Déduplication + qualité + insert DB + JSONL. Retourne True si sauvé.
+
+        Args:
+            url (str): url de la page
+            title (str): titre de la page
+            content (str): contenu de la page
+            depth (int): profondeur de la page
+            links (set): liens de la page
+            source (str, optional): source de la page. Defaults to "html".
+
+        Returns:
+            bool: True si la page a été sauvegardée, False sinon (doublon ou filtrée).
+        """
         content_hash = _sha256(content)
         if self.database.hash_exists(content_hash):
-            return False  # doublon
+            return False  #? doublon
 
         ok, reason = self._passes_pipeline(url, content)
         if not ok:
-            return False  # qualité/langue insuffisante
+            return False  #? qualité/langue insuffisante
 
         word_count = len(content.split())
         saved = self.database.insert_page(
             url=url, title=title, content=content,
             content_hash=content_hash, depth=depth,
             status_code=200, word_count=word_count,
-            link_count=len(links),
+            link_count=len(links)
         )
         if saved:
             self._write_jsonl({
                 "text": content, "url": url,
                 "title": title, "word_count": word_count,
-                "source": source,
+                "source": source
             })
         return saved
 
-    # ------------------------------------------------------------------
-    # Traitement d'une URL
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #* Traitement d'une URL
+    #* ------------------------------------------------------------------
 
-    async def process_url(self, url: str, depth: int,
-                          session: aiohttp.ClientSession,
-                          queue: asyncio.Queue):
+    async def process_url(self, url: str, depth: int, session: aiohttp.ClientSession,queue: asyncio.Queue):
+        """ Récupère, filtre, déduplique et sauvegarde une URL (HTML ou PDF).
 
-        # -- Filtre URL ------------------------------------------------
+        Args:
+            url (str): URL à traiter
+            depth (int): Profondeur de l'URL
+            session (aiohttp.ClientSession): Session HTTP
+            queue (asyncio.Queue): File d'attente des URLs à traiter
+        """
+        #&  Filtre URL
         blacklist = self.config.get("url_blacklist", [])
         if _is_url_blacklisted(url, blacklist):
             async with self.stats_lock:
                 self.stats["skipped_url"] += 1
             return
 
-        # -- Visited + limites -----------------------------------------
+        #&  Visited + limites 
         async with self.visited_lock:
             if url in self.visited:
                 return
@@ -617,12 +638,12 @@ class WebCrawler:
             self.stats["visited"] += 1
         self._update_bars(visited_delta=1)
 
-        # -- Fetch -----------------------------------------------------
+        #& Fetch 
         result = await self.fetch(session, url)
         if not result:
             return
 
-        # -- Branche PDF -----------------------------------------------
+        #& Branche PDF 
         if result.is_pdf:
             title, content = _extract_pdf_text(result.pdf_bytes, url)
             if not content.strip():
@@ -657,16 +678,13 @@ class WebCrawler:
                 self._write_jsonl({
                     "text": content, "url": url,
                     "title": title, "word_count": word_count,
-                    "source": "pdf_web",
+                    "source": "pdf_web"
                 })
-                tqdm.write(self._colorize(
-                    f"[PDF-SAVED] « {title[:60] or url} » — {word_count} mots | {url}",
-                    "SUCCESS",
-                ))
+                tqdm.write(self._colorize(f"[PDF-SAVED] « {title[:60] or url} » — {word_count} mots | {url} SUCCESS"))
                 self._log_progress()
             return
 
-        # -- Branche HTML ----------------------------------------------
+        #&   Branche HTML 
         html = result.html
         title, content = _extract_main_content(html, url)
 
@@ -701,21 +719,18 @@ class WebCrawler:
             url=url, title=title, content=content,
             content_hash=content_hash, depth=depth,
             status_code=200, word_count=word_count,
-            link_count=len(links),
+            link_count=len(links)
         )
         if saved:
             async with self.stats_lock:
                 self.stats["saved"] += 1
             self._update_bars(saved_delta=1)
-            tqdm.write(self._colorize(
-                f"[SAVED] « {title[:70] or url} » — {word_count} mots | {url}",
-                "SUCCESS",
-            ))
+            tqdm.write(self._colorize(f"[SAVED] « {title[:70] or url} » — {word_count} mots | {url} SUCCESS"))
             self._log_progress()
             self._write_jsonl({
                 "text": content, "url": url,
                 "title": title, "word_count": word_count,
-                "source": "html",
+                "source": "html"
             })
 
         async with self.visited_lock:
@@ -723,12 +738,11 @@ class WebCrawler:
                 if link not in self.visited:
                     await queue.put((link, depth + 1))
 
-    # ------------------------------------------------------------------
-    # Workers
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                          Workers
+    #* ------------------------------------------------------------------
 
-    async def worker(self, worker_id: int, session: aiohttp.ClientSession,
-                     queue: asyncio.Queue):
+    async def worker(self, worker_id: int, session: aiohttp.ClientSession, queue: asyncio.Queue):
         while self.is_running:
             try:
                 url, depth = await asyncio.wait_for(queue.get(), timeout=3.0)
@@ -741,8 +755,7 @@ class WebCrawler:
                 queue.task_done()
             except asyncio.TimeoutError:
                 async with self.stats_lock:
-                    done = (self.stats["visited"] >= self.config["max_pages"]
-                            or self.stats["visited"] >= self._site_max_pages)
+                    done = (self.stats["visited"] >= self.config["max_pages"] or self.stats["visited"] >= self._site_max_pages)
                 if done or queue.empty():
                     break
             except Exception as e:
@@ -752,9 +765,9 @@ class WebCrawler:
                 except Exception:
                     pass
 
-    # ------------------------------------------------------------------
-    # BFS
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                          BFS
+    #* ------------------------------------------------------------------
 
     async def _run_bfs(self, seed_urls: list, session: aiohttp.ClientSession):
         queue: asyncio.Queue = asyncio.Queue()
@@ -766,9 +779,9 @@ class WebCrawler:
         ]
         await asyncio.gather(*workers, return_exceptions=True)
 
-    # ------------------------------------------------------------------
-    # Point d'entrée
-    # ------------------------------------------------------------------
+    #* ------------------------------------------------------------------
+    #*                      Point d'entrée
+    #* ------------------------------------------------------------------
 
     async def _crawl_site(self, start_url: str, session: aiohttp.ClientSession):
         async with self.visited_lock:
@@ -782,6 +795,10 @@ class WebCrawler:
         async with self.stats_lock:
             n = self.stats["visited"] - self._site_pages_start
         self.log(f"[SITE] Fin : {start_url} — {n} pages visitées", "INFO")
+
+    #* ------------------------------------------------------------------
+    #*                      Crawl global
+    #* ------------------------------------------------------------------
 
     async def _crawl_global(self, start_urls: list, session: aiohttp.ClientSession):
         self._site_max_pages = self.config["max_pages"]
@@ -859,7 +876,7 @@ class WebCrawler:
             f"  Durée                : {elapsed:.2f} s",
             f"  Vitesse              : {speed:.2f} pages/s",
             f"  Dataset JSONL        : {jsonl_path}",
-            sep,
+            sep
         ]:
             tqdm.write(line)
 

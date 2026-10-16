@@ -35,7 +35,7 @@ LIMIT_CORPUS = VOCAB_SIZE * 10  # ~10 occurrences par token en moyenne
 
 
 
-def _configure_stdout_for_unicode() -> None:
+def _configure_stdout_for_unicode():
     """Force UTF-8 output sur les terminaux compatibles."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -43,13 +43,19 @@ def _configure_stdout_for_unicode() -> None:
         pass
 
 
-def _stream_texts(path: str) -> Generator[str, None, None]:
-    """
-    Générateur qui yield les textes du JSONL ligne par ligne.
+def _stream_texts(path: str):
+    """ Générateur de textes à partir d'un fichier JSONL.
+    Chaque ligne du fichier doit être un JSON avec un champ "text".
 
-    Avantage : aucune liste intermédiaire en mémoire — le fichier est lu
+    +Avantage : aucune liste intermédiaire en mémoire — le fichier est lu
     de manière séquentielle. Sur un corpus de plusieurs Go, la différence
     est critique (RAM constante vs RAM ∝ taille du corpus).
+
+    Args:
+        path (str): Chemin vers le fichier JSONL contenant les textes.
+
+    Yields:
+        Generator[str, None, None]: Générateur de textes extraits du fichier.
     """
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -61,7 +67,7 @@ def _stream_texts(path: str) -> Generator[str, None, None]:
                 yield text
 
 
-def TokenizeData(mode: str = "auto") -> Tokenizer:
+def TokenizeData(mode: str = "auto"):
     """
     Entraîne (ou charge) un tokenizer BPE et le sauvegarde.
 
@@ -78,7 +84,7 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
     if mode not in {"auto", "use_existing", "retrain"}:
         raise ValueError(f"Mode tokenizer invalide: {mode}")
 
-    # * Gestion du modèle existant selon mode *
+    #* Gestion du modèle existant selon mode *
     model_path = Path(DEFAULT_MODEL_PATH)
     if model_path.exists() and mode in {"auto", "use_existing"}:
         print(f"[TokenizeData] Modèle existant chargé depuis {model_path}")
@@ -87,7 +93,7 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
     if (not model_path.exists()) and mode == "use_existing":
         raise FileNotFoundError(f"Tokenizer introuvable en mode use_existing: {model_path}")
 
-    # * Entraînement depuis le corpus streamé *
+    #* Entraînement depuis le corpus streamé *
     if mode == "retrain" and model_path.exists():
         print("[TokenizeData] Mode retrain actif — ré-entraînement forcé...")
     else:
@@ -102,7 +108,7 @@ def TokenizeData(mode: str = "auto") -> Tokenizer:
         target_vocab_size=VOCAB_SIZE,
         min_pair_freq=2,
         verbose=True,
-        corpus_limit=LIMIT_CORPUS,
+        corpus_limit=LIMIT_CORPUS
     )
 
     tok.save()

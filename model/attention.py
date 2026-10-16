@@ -49,30 +49,24 @@ class Attention(nn.Module):
         fallback pour PyTorch < 2.0 (sans sdpa), alloué une seule fois.
     """
 
-    def __init__(
-        self,
-        embedding_dim: int,
-        num_heads: int = 8,
-        dropout: float = 0.1,
-        max_seq_length: int = 1024,
-    ):
+    def __init__(self, embedding_dim: int, num_heads: int = 8, dropout: float = 0.1, max_seq_length: int = 1024):
         super().__init__()
 
-        assert embedding_dim % num_heads == 0, \
-            "embedding_dim doit être divisible par num_heads"
+        assert embedding_dim % num_heads == 0, "embedding_dim doit être divisible par num_heads"
 
+        #& Paramètres de l'attention
         self.embedding_dim = embedding_dim
-        self.num_heads     = num_heads
-        self.head_dim      = embedding_dim // num_heads
-        self.scale         = self.head_dim ** -0.5
-        self.dropout_p     = dropout
+        self.num_heads = num_heads
+        self.head_dim = embedding_dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.dropout_p = dropout
 
-        # Projections Q, K, V fusionnées (1 appel kernel au lieu de 3)
-        self.qkv_proj  = nn.Linear(embedding_dim, 3 * embedding_dim, bias=False)
-        self.out_proj  = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        #& Projections Q, K, V fusionnées (1 appel kernel au lieu de 3)
+        self.qkv_proj = nn.Linear(embedding_dim, 3 * embedding_dim, bias=False)
+        self.out_proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
         self.out_dropout = nn.Dropout(dropout)
 
-        # Masque causal pré-calculé (fallback sans sdpa)
+        #& Masque causal pré-calculé (fallback sans sdpa)
         self.register_buffer(
             "causal_mask",
             torch.tril(
@@ -81,15 +75,10 @@ class Attention(nn.Module):
             persistent=False,
         )
 
-        # Détection Flash Attention (PyTorch ≥ 2.0)
+        #& Détection Flash Attention (PyTorch ≥ 2.0)
         self._use_flash = hasattr(F, "scaled_dot_product_attention")
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    def forward(self, x: torch.Tensor, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, use_cache: bool = False,):
         """
         Args:
             x        : [B, T, C]  — T=1 pendant le decode avec KV cache
@@ -97,21 +86,21 @@ class Attention(nn.Module):
             use_cache: si True, retourne le KV courant pour le prochain appel
 
         Returns:
-            out       : [B, T, C]
+            out (Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]))       : [B, T, C]
             present_kv: (K, V) ou None
         """
         B, T, C = x.shape
 
-        # -- Projection QKV ------------------------------------------------
+        #& Projection QKV 
         qkv = self.qkv_proj(x)                      # [B, T, 3C]
         Q, K, V = qkv.split(self.embedding_dim, dim=-1)
 
-        # -- Split en heads [B, H, T, head_dim] ---------------------------
+        #& Split en heads [B, H, T, head_dim]
         Q = Q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         K = K.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # -- KV Cache : concat avec le passé ------------------------------
+        #& KV Cache : concat avec le passé
         is_decoding = past_kv is not None
         if is_decoding:
             past_K, past_V = past_kv
@@ -121,40 +110,48 @@ class Attention(nn.Module):
         present_kv = (K, V) if use_cache else None
         T_full = K.shape[2]  # longueur totale après concat
 
-        # -- Attention -----------------------------------------------------
+        #& Attention 
         if self._use_flash:
-            # Règle is_causal :
-            #
-            #   Training / prefill (past_kv=None, T == T_full) :
-            #     is_causal=True -> masque triangulaire inférieur standard.
-            #     Correct et optimal.
-            #
-            #   Decode (past_kv non-None, T=1, T_full > 1) :
-            #     is_causal=True demanderait à sdpa un masque [TxT_full]
-            #     où seule la ligne Q[0] serait active. PyTorch applique
-            #     en réalité un masque [1x1] qui bloque toutes les positions
-            #     du cache sauf la dernière -> les K/V passés sont ignorés.
-            #     is_causal=False est correct : Q[t] peut légitimement
-            #     voir tous les tokens passés (ils sont antérieurs).
+            #! Règle is_causal :
+            #!
+            #!   Training / prefill (past_kv=None, T == T_full) :
+            #!     is_causal=True -> masque triangulaire inférieur standard.
+            #!     Correct et optimal.
+            #!
+            #!   Decode (past_kv non-None, T=1, T_full > 1) :
+            #!     is_causal=True demanderait à sdpa un masque [TxT_full]
+            #!     où seule la ligne Q[0] serait active. PyTorch applique
+            #!     en réalité un masque [1x1] qui bloque toutes les positions
+            #!     du cache sauf la dernière -> les K/V passés sont ignorés.
+            #!     is_causal=False est correct : Q[t] peut légitimement
+            #!     voir tous les tokens passés (ils sont antérieurs).
+            #! NOTE : un prefill par morceaux (past_kv non-None ET T > 1)
+            #! nécessiterait un attn_mask explicite ; generate() ne le fait pas.
             is_causal = not is_decoding
 
             attn_out = F.scaled_dot_product_attention(
                 Q, K, V,
                 attn_mask=None,
                 dropout_p=self.dropout_p if self.training else 0.0,
-                is_causal=is_causal,
+                is_causal=is_causal
             )
         else:
-            # Fallback manuel avec buffer pré-calculé
+            #! Fallback manuel avec buffer pré-calculé.
+            #! Les T queries courantes sont les DERNIÈRES positions de la
+            #! séquence complète : lignes [T_full - T, T_full) du masque.
+            #! (avant : lignes [0, T) -> en decode, Q ne voyait que le 1er token)
             scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-            mask   = self.causal_mask[:, :, :T, :T_full]
+            mask   = self.causal_mask[:, :, T_full - T:T_full, :T_full]
             scores = scores.masked_fill(~mask, float("-inf"))
-            attn_out = torch.matmul(torch.softmax(scores, dim=-1), V)
+            attn   = torch.softmax(scores, dim=-1)
+            if self.training and self.dropout_p > 0:
+                attn = F.dropout(attn, p=self.dropout_p)
+            attn_out = torch.matmul(attn, V)
 
-        # -- Merge heads [B, T, C] -----------------------------------------
+        #& Merge heads [B, T, C]
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, C)
 
-        # -- Projection de sortie ------------------------------------------
+        #& Projection de sortie
         out = self.out_dropout(self.out_proj(attn_out))
 
         return out, present_kv

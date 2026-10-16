@@ -5,6 +5,7 @@ beautifulsoup4>=4.12.0
 trafilatura>=1.2.0
 langdetect>=1.0.9
 libzim>=0.3.0
+numpy>=1.24
 
 # Optional / extras (install if you need ZIM support or advanced tokenizers)
 # sentencepiece>=0.1.99

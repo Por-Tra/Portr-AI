@@ -40,12 +40,21 @@ if str(ROOT_DIR) not in sys.path:
 from model.gpt_model import GPT
 
 
-# Tokens spéciaux à ignorer au décodage
+#! Tokens spéciaux à ignorer au décodage
 _SPECIAL_TOKENS = {"<PAD>", "<UNK>", "<BOS>", "<EOS>"}
 
 
 def load_model_checkpoint(model: torch.nn.Module,checkpoint_path: str | Path,map_location: str = "cpu") -> dict:
-    """Charge les poids depuis un checkpoint d'entraînement."""
+    """Charge les poids depuis un checkpoint d'entraînement.
+
+    Args:
+        model (torch.nn.Module): modèle sauvegarder
+        checkpoint_path (str | Path): chemin du checkpoint 
+        map_location (str, optional): Emplacement de la mémoire pour le chargement des poids. Defaults to "cpu".
+
+    Returns:
+        dict: Dictionnaire contenant les informations du checkpoint (état du modèle, hyperparamètres, etc.).
+    """
     payload = torch.load(checkpoint_path, map_location=map_location, weights_only=True)
     model.load_state_dict(payload["model_state_dict"])
     return payload
@@ -65,6 +74,7 @@ def load_model_from_final_state( final_model_path: str | Path, tokenizer, device
     payload = torch.load(final_model_path, map_location="cpu", weights_only=True)
     hparams = payload.get("model_hparams") or {}
 
+    #& Reconstruire le modèle avec les hyperparamètres sauvegardés
     vocab_size = int(hparams.get("vocab_size") or len(tokenizer.get_token_to_id()))
     seq_length = int(hparams.get("seq_length") or 128)
     embedding_dim = int(hparams.get("embedding_dim") or 256)
@@ -78,7 +88,7 @@ def load_model_from_final_state( final_model_path: str | Path, tokenizer, device
         embedding_dim=embedding_dim,
         num_heads=num_heads,
         num_blocks=num_blocks,
-        dropout=dropout,
+        dropout=dropout
     )
     model.load_state_dict(payload["model_state_dict"])
     model.to(device)
@@ -91,13 +101,11 @@ def decode_token_ids(token_ids: list[int], tokenizer) -> str:
     Décode une liste d'ids de tokens en texte lisible.
 
     Logique BPE :
-    - Un token qui se termine par </w> marque la fin d'un mot.
-      On retire le marqueur et on ajoute un espace APRÈS ce token,
-      ce qui sépare correctement les mots dans le texte reconstitué.
-    - Un token sans </w> est un sous-mot intermédiaire : on le concatène
-      directement au suivant, sans espace.
+    - Le début de mot est marqué par ▁ (collé au mot) -> converti en espace.
+    - Les autres tokens sont concaténés directement.
     - Les tokens spéciaux (<PAD>, <BOS>, <EOS>, <UNK>) sont ignorés.
-    - Le préfixe ▁ (SentencePiece style) est converti en espace.
+    - Compatibilité anciens modèles : un token finissant par </w> marque la
+      fin d'un mot -> marqueur retiré et espace ajouté.
 
     Args:
         token_ids : Liste d'entiers (ids de tokens).
@@ -107,7 +115,7 @@ def decode_token_ids(token_ids: list[int], tokenizer) -> str:
         Texte décodé, nettoyé des espaces superflus.
     """
     id_to_token = tokenizer.get_id_to_token()
-    end_of_word = getattr(tokenizer, "end_of_word", "</w>")
+    end_of_word = getattr(tokenizer, "end_of_word", "")
     pieces: list[str] = []
 
     for idx in token_ids:
@@ -117,29 +125,17 @@ def decode_token_ids(token_ids: list[int], tokenizer) -> str:
         if tok in _SPECIAL_TOKENS:
             continue
 
-        if tok.endswith(end_of_word):
-            # Fin de mot : retirer le marqueur, ajouter un espace séparateur
+        if end_of_word and tok.endswith(end_of_word):
             pieces.append(tok[: -len(end_of_word)] + " ")
         else:
-            # Sous-mot intermédiaire : concaténation directe
             pieces.append(tok)
 
-    text = "".join(pieces)
-    # Normaliser le préfixe ▁ (utilisé par certains tokenizers comme marqueur d'espace)
-    text = text.replace("▁", " ")
-    # Supprimer les espaces multiples et les espaces en bord de chaîne
+    text = "".join(pieces).replace("▁", " ")
+    #& Supprimer les espaces multiples et les espaces en bord de chaîne
     return " ".join(text.split())
 
 
-def generate_from_prompt(
-    model: torch.nn.Module,
-    tokenizer,
-    prompt: str,
-    max_new_tokens: int = 40,
-    temperature: float = 1.0,
-    top_k: Optional[int] = 20,
-    device: str = "cpu",
-) -> tuple[list[int], str]:
+def generate_from_prompt(model: torch.nn.Module, tokenizer, prompt: str, max_new_tokens: int = 40, temperature: float = 1.0, top_k: Optional[int] = 20, device: str = "cpu"):
     """Encode un prompt, génère une continuation, puis décode.
 
     Args:
@@ -168,7 +164,7 @@ def generate_from_prompt(
             initial_tokens=input_tokens,
             max_length=max_length,
             temperature=temperature,
-            top_k=top_k,
+            top_k=top_k
         )
 
     token_ids = out_tokens[0].detach().cpu().tolist()

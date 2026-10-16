@@ -23,6 +23,7 @@ description du script:
 
 
 CRAWLER_CONFIG = {
+    #& Change "start_urls" to define the initial seed URLs for the crawler.
     "start_urls": [
         "https://example.com",
     ],

@@ -47,7 +47,7 @@ DEFAULT_CORPUS_LIMIT = 1_000
 class Tokenizer:
     """Tokeniseur BPE caractère -> sous-mots (implémentation optimisée)."""
 
-    def __init__(self, end_of_word: str = "</w>"):
+    def __init__(self, end_of_word: str = ""):
         self.end_of_word = end_of_word
         self.vocab: set[str] = set()
         self.merges: List[Tuple[str, str]] = []
@@ -60,38 +60,72 @@ class Tokenizer:
         self.id_to_token: Dict[int, str] = {}
 
     #* ------------------------------------------------------------------
-    #* Découpage et normalisation
+    #*                  Découpage et normalisation
     #* ------------------------------------------------------------------
 
     def split_text(self, text: str) -> List[str]:
-        """Découpe texte en mots + ponctuation en conservant les espaces."""
-        return re.findall(r"\s+|[\w]+|[^\w\s]", text, re.UNICODE)
+        """Découpe texte en mots + ponctuation, l'espace précédent restant
+        collé au mot (" bonjour" -> un seul morceau).
 
-    def normalize_token(self, token: str) -> str:
-        return SPACE_TOKEN if token.isspace() else token
+        Args:
+            text (str): Texte à découper.
+
+        Returns:
+            List[str]: Liste de morceaux (tokens bruts) avec espaces collés.
+        """
+        return re.findall(r"\s*\w+|\s*[^\w\s]|\s+", text, re.UNICODE)
+
+    def normalize_token(self, token: str):
+        """Remplace l'espace de tête par ▁ (style SentencePiece).
+
+        Args:
+            token (str): Morceau de texte brut (avec ou sans espace de tête).
+
+        Returns:
+            str: Morceau de texte normalisé.
+        """
+        if token.isspace():
+            return SPACE_TOKEN
+        if token[0].isspace():
+            return SPACE_TOKEN + token.lstrip()
+        return token
 
     #* ------------------------------------------------------------------
     #* Préparation corpus
     #* ------------------------------------------------------------------
 
-    def prepare_word(self, word: str) -> List[str]:
-        """Convertit un mot en symboles caractères + marqueur fin de mot."""
-        if not word:
-            return [self.end_of_word]
-        return list(word) + [self.end_of_word]
+    def prepare_word(self, word: str):
+        """Convertit un mot en symboles caractères
 
-    def _build_word_freq(self, texts: Iterable[str], limit: int = 0) -> Dict[Tuple[str, ...], int]:
+        Args:
+            word (str): Mot à convertir.
+
+        Returns:
+            List[str]: Liste des symboles caractères.
         """
-        Construit un dictionnaire { séquence_symboles -> fréquence }.
+        symbols = list(word)
+        if self.end_of_word:
+            symbols.append(self.end_of_word)
+        return symbols
 
-        Au lieu de stocker chaque occurrence du mot "the" 10 000 fois,
-        on stocke  ('t','h','e','</w>') -> 10000.
-        Cela réduit drastiquement le coût des itérations suivantes.
+    def _build_word_freq(self, texts: Iterable[str], limit: int = 0):
+        """Construit un dictionnaire { séquence_symboles -> fréquence }.
+
+        Au lieu de stocker chaque occurrence du mot "the" 10 000 fois, on stocke  ('t','h','e','</w>') -> 10000.
+
+        Args:
+            texts (Iterable[str]): Générateur ou liste de textes à traiter.
+            limit (int, optional): Limite sur le nombre de textes à traiter. Defaults to 0.
+
+        Returns:
+            Dict[Tuple[str, ...], int]: Dictionnaire de fréquences des mots uniques.
         """
         word_freq: Dict[Tuple[str, ...], int] = defaultdict(int)
         for i, text in enumerate(tqdm(texts, desc="Preparing corpus"), start=1):
+
             if limit and i > limit:
                 break
+
             for token in self.split_text(text):
                 token = self.normalize_token(token)
                 key = tuple(self.prepare_word(token))
@@ -99,20 +133,31 @@ class Tokenizer:
         return word_freq
 
     #* ------------------------------------------------------------------
-    #* Comptage de paires (helpers internes)
+    #*              Comptage de paires (helpers internes)
     #* ------------------------------------------------------------------
 
     @staticmethod
-    def _pairs_in_word(word: Tuple[str, ...]) -> List[Tuple[str, str]]:
-        """Trouve toutes les paires de symboles adjacents dans un mot donné."""
+    def _pairs_in_word(word: Tuple[str, ...]):
+        """Trouve toutes les paires de symboles adjacents dans un mot donné.
+
+        Args:
+            word (Tuple[str, ...]): Mot représenté comme une séquence de symboles.
+
+        Returns:
+            List[Tuple[str, str]]: Liste de paires de symboles adjacents.
+        """
         return [(word[i], word[i + 1]) for i in range(len(word) - 1)]
 
-    def _count_all_pairs(self, word_freq: Dict[Tuple[str, ...], int]) -> Tuple[Dict[Tuple[str, str], int], Dict[Tuple[str, str], set]]:
-        """
-        Comptage initial complet.
-        Retourne :
-          pair_counts  : paire -> fréquence agrégée
-          pair_to_words: paire -> ensemble des mots qui la contiennent
+    def _count_all_pairs(self, word_freq: Dict[Tuple[str, ...], int]):
+        """Comptage initial complet.
+        Comptage initial de toutes les paires de symboles dans le dictionnaire de fréquences des mots.
+
+        Args:
+            word_freq (Dict[Tuple[str, ...], int]): Dictionnaire de fréquences des mots uniques.
+
+        Returns:
+            Tuple[Dict[Tuple[str, str], int], Dict[Tuple[str, str], set]]: Dictionnaire des fréquences 
+            des paires de symboles et dictionnaire des mots contenant chaque paire.
         """
         pair_counts: Dict[Tuple[str, str], int] = defaultdict(int)
         pair_to_words: Dict[Tuple[str, str], set] = defaultdict(set)
@@ -125,17 +170,18 @@ class Tokenizer:
         return pair_counts, pair_to_words
 
     #* ------------------------------------------------------------------
-    #* Training (version optimisée)
+    #*              Training (version optimisée)
     #* ------------------------------------------------------------------
 
-    def train(self, texts: Iterable[str], target_vocab_size: int = 5000, min_pair_freq: int = 2, verbose: bool = False, corpus_limit: int = 0) -> None:
-        """
-        Apprend les fusions BPE.
+    def train(self, texts: Iterable[str], target_vocab_size: int = 5000, min_pair_freq: int = 2, verbose: bool = False, corpus_limit: int = 0):
+        """Apprend les fusions BPE.
 
-        Optimisations actives :
-           word_freq dict   -> évite de re-parcourir les doublons de mots
-           mise à jour incrémentale des pair_counts après chaque merge
-           heap max (lazy-deletion) -> meilleure paire en O(log P)
+        Args:
+            texts (Iterable[str]): Générateur ou liste de textes à traiter.
+            target_vocab_size (int, optional): Taille cible du vocabulaire. Defaults to 5000.
+            min_pair_freq (int, optional): Fréquence minimale requise pour qu'une paire soit fusionnée. Defaults to 2.
+            verbose (bool, optional): Activer les messages de débogage. Defaults to False.
+            corpus_limit (int, optional): Limite sur le nombre de textes à utiliser. Defaults to 0.
         """
         # * 1. Construction du dictionnaire de fréquences *
         word_freq = self._build_word_freq(texts, limit=corpus_limit)
@@ -151,9 +197,7 @@ class Tokenizer:
         pair_counts, pair_to_words = self._count_all_pairs(word_freq)
 
         # * 4. Heap max (on stocke des tuples (-fréquence, paire)) *
-        heap: List[Tuple[int, Tuple[str, str]]] = [
-            (-cnt, pair) for pair, cnt in pair_counts.items()
-        ]
+        heap: List[Tuple[int, Tuple[str, str]]] = [(-cnt, pair) for pair, cnt in pair_counts.items()]
         heapq.heapify(heap)
 
         pbar = tqdm(total=target_vocab_size, desc="Training BPE")
@@ -181,7 +225,7 @@ class Tokenizer:
                     print(f"\n[BPE] Arrêt : {reason}")
                 break
 
-            # * Fusionner *
+            #* Fusionner 
             a, b = best_pair
             merged = a + b
             self.vocab.add(merged)
@@ -204,6 +248,10 @@ class Tokenizer:
                     else:
                         pair_counts[pair] = cnt
                         pair_to_words[pair].discard(old_word)
+                        #& Re-push avec le nouveau compte : l'ancienne entrée du
+                        #& heap sera rejetée par la lazy deletion, sans ce push
+                        #& la paire disparaissait définitivement du heap.
+                        heapq.heappush(heap, (-cnt, pair))
 
                 new_word_list: List[str] = []
                 i = 0
@@ -229,11 +277,6 @@ class Tokenizer:
                     pair_to_words[pair].add(new_word)
                     heapq.heappush(heap, (-new_cnt, pair))
 
-            # TODO: ASUP
-            # Afficher les merges
-            # if verbose and len(self.merges) % 100 == 0:
-                # print(f"[BPE] merges={len(self.merges)} | vocab={len(self.vocab)} | best={best_pair} ({best_freq})")
-
         pbar.close()
 
         # * Finalisation *
@@ -244,33 +287,19 @@ class Tokenizer:
     #* Tokenisation
     #* ------------------------------------------------------------------
 
-    def _apply_merges(self, symbols: List[str]) -> List[str]:
-        """
-        Applique les merges appris à une séquence de symboles.
-
-        Optimisation vs version précédente :
-        -----------------------------------------------------------------
-        Avant : à chaque itération, on construisait deux listes
-                intermédiaires (pairs + ranked) de taille O(L), soit
-                2 allocations heap par merge.
-
-        Après : un seul scan linéaire avec variables locales.
-                - merge_ranks.get() en accès direct (dict local)
-                - best_rank / best_idx mis à jour in-place
-                - une seule allocation pour le nouveau symbols
-                -> ~2x moins d'allocations pour les mots courts/moyens
-        -----------------------------------------------------------------
+    def _apply_merges(self, symbols: List[str]):
+        """Applique les fusions BPE sur une séquence de symboles.
 
         Args:
-            symbols: ex. ['t', 'h', 'e', '</w>']
+            symbols (List[str]): Liste de symboles à fusionner. => ["t", "h", "e", "</w>"]
 
         Returns:
-            ex. ['the</w>'] après application des merges
+            List[str]: Liste de tokens fusionnés. => ["the", "</w>"]
         """
         merge_ranks = self.merge_ranks  #& référence locale (évite self. lookup)
 
         while len(symbols) >= 2:
-            best_rank = -1          #& -1 = "rien trouvé"
+            best_rank = -1  #& -1 = "rien trouvé"
             best_idx  = -1
 
             #& Scan unique : on cherche la paire de plus bas rang (= priorité max)
@@ -280,7 +309,7 @@ class Tokenizer:
                     best_rank = rank
                     best_idx  = i
 
-            if best_idx == -1:      #& plus aucune paire connue
+            if best_idx == -1:  #& plus aucune paire connue
                 break
 
             #& Fusion : on reconstruit symbols autour de best_idx
@@ -290,13 +319,15 @@ class Tokenizer:
 
         return symbols
 
-    def tokenize_word(self, word: str, strip_eow: bool = True) -> List[str]:
+    def tokenize_word(self, word: str, strip_eow: bool = False) -> List[str]:
         """
         Tokenise un mot donné en appliquant les merges appris.
 
         Args:
             word     : Le mot à tokeniser.
             strip_eow: Si True, retire le marqueur de fin de mot des tokens.
+                       (!) uniquement pour l'affichage : les tokens obtenus
+                       ne sont plus dans le vocabulaire (-> <UNK> à l'encodage).
 
         Returns:
             Liste de tokens.
@@ -304,23 +335,23 @@ class Tokenizer:
         symbols = self.prepare_word(word)
         tokens = self._apply_merges(symbols)
         if strip_eow:
-            tokens = [
-                t.replace(self.end_of_word, "")
-                for t in tokens
-                if t != self.end_of_word
-            ]
+            if self.end_of_word:
+                tokens = [
+                    t.replace(self.end_of_word, "")
+                    for t in tokens
+                    if t != self.end_of_word
+                ]
         return tokens
 
-    def tokenize_text(self, text: str, strip_eow: bool = True) -> List[str]:
-        """
-        Tokenise un texte complet.
+    def tokenize_text(self, text: str, strip_eow: bool = False):
+        """ Tokenise un texte complet en appliquant les merges appris.
 
         Args:
-            text     : Le texte à tokeniser.
-            strip_eow: Si True, retire le marqueur de fin de mot.
+            text (str): Texte à tokeniser.
+            strip_eow (bool, optional): Si True, retire le marqueur de fin de mot des tokens. Defaults to False.
 
         Returns:
-            Liste de tokens.
+            List[str]: Liste de tokens BPE.
         """
         output: List[str] = []
         for token in self.split_text(text):
@@ -329,24 +360,35 @@ class Tokenizer:
         return output
 
     #* ------------------------------------------------------------------
-    #* Sérialisation
+    #*                          Sérialisation
     #* ------------------------------------------------------------------
 
-    def save(self, path: str = DEFAULT_MODEL_PATH) -> None:
-        """Sauvegarde le modèle BPE dans un fichier JSON."""
+    def save(self, path: str = DEFAULT_MODEL_PATH):
+        """Sauve le modèle BPE dans un fichier JSON.
+
+        Args:
+            path (str, optional): Chemin du fichier JSON dans lequel sauvegarder le modèle. Defaults to DEFAULT_MODEL_PATH.
+        """
         os.makedirs(os.path.dirname(path), exist_ok=True)
         data = {
             "end_of_word": self.end_of_word,
             "vocab": sorted(self.vocab),
             "merges": [[a, b] for a, b in self.merges],
-            "token_to_id": self.token_to_id,
+            "token_to_id": self.token_to_id
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     @classmethod
-    def load(cls, path: str = DEFAULT_MODEL_PATH) -> "Tokenizer":
-        """Charge un modèle BPE depuis un fichier JSON."""
+    def load(cls, path: str = DEFAULT_MODEL_PATH):
+        """ Charge un modèle BPE depuis un fichier JSON.
+
+        Args:
+            path (str, optional): Chemin du fichier JSON à partir duquel charger le modèle. Defaults to DEFAULT_MODEL_PATH.
+
+        Returns:
+            Tokenizer: Instance du tokenizer BPE chargé depuis le fichier JSON.
+        """
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -366,7 +408,7 @@ class Tokenizer:
         return tok
 
     #* ------------------------------------------------------------------
-    #* Encoding
+    #*                          Encoding
     #* ------------------------------------------------------------------
 
     def encode(self, text: str) -> List[int]:
@@ -374,43 +416,30 @@ class Tokenizer:
         unk_id = self.token_to_id["<UNK>"]
         return [self.token_to_id.get(t, unk_id) for t in tokens]
 
-    def encode_corpus(self, corpus_path: str, limit: int = 0) -> List[int]:
-        """
-        Encode un corpus JSONL complet en liste d'ids.
-
-        Optimisations :
-        ------------------------------------------------------------------
-        | Cache word -> [ids]  | _apply_merges appelée une seule fois     |
-        |                      | par forme de mot unique (hit ~100% après |
-        |                      | quelques centaines de lignes)            |
-        | array('i')           | Stockage contigu ; extend par batch      |
-        |                      | ~3x plus rapide qu'une list + append     |
-        ------------------------------------------------------------------
+    def encode_corpus(self, corpus_path: str, limit: int = 0) -> array:
+        """ Encode un corpus complet en une séquence d'ids de tokens.
 
         Args:
-            corpus_path: Chemin vers le fichier JSONL.
-            limit: limite de lignes JSONL a encoder (0 = illimite).
+            corpus_path (str): Chemin vers le fichier JSONL contenant le corpus.
+            limit (int, optional): Limite de lignes JSONL à encoder (0 = illimitée).
 
         Returns:
-            Liste d'entiers (token ids).
+            array: Tableau d'ids de tokens encodés.
         """
         token_to_id = self.token_to_id
-        unk_id = token_to_id["<UNK>"]
+        unk_id = token_to_id["<UNK>"]   #& id du token inconnu
         split_text = self.split_text
         normalize_token = self.normalize_token
         tokenize_word = self.tokenize_word
         json_loads = json.loads
 
-        # Cache raw_token -> [ids]
+        #& Cache raw_token -> [ids]
         word_cache: Dict[str, List[int]] = {}
 
         def token_ids(raw: str) -> List[int]:
             ids = word_cache.get(raw)
             if ids is None:
-                ids = [
-                    token_to_id.get(t, unk_id)
-                    for t in tokenize_word(normalize_token(raw))
-                ]
+                ids = [token_to_id.get(t, unk_id) for t in tokenize_word(normalize_token(raw), strip_eow=False)]
                 word_cache[raw] = ids
             return ids
 
@@ -429,10 +458,10 @@ class Tokenizer:
                 for raw in split_text(text):
                     buf.extend(token_ids(raw))
 
-        return buf.tolist()
+        return buf
 
     #* ------------------------------------------------------------------
-    #* Accesseurs
+    #*                          Accesseurs
     #* ------------------------------------------------------------------
 
     def vocab_size(self) -> int:
