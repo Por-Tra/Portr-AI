@@ -6,10 +6,21 @@
     <title>Embedding projection</title>
 </head>
 <body>
-    <img src="../asset/logo.png">
+
+    <h1>Embedding projection</h1>
+    <p> This page shows the embedding projection of the data.</p>
+    <p> Actually, we have 3D projections and 2D projections per version.</p>
+
+
     <h1>Package version</h1>
 
-    <p><a href="version/v1/V1_embeddings_umap_3d.html"> Version: 1.0.0</a></p>
+    <h3>Version 1.0.0</h3>
+    <select id="version-select" onchange="location = this.value;" label="Select projection variant">
+        <option value="version/V-1-0-0_embeddings_umap_3d.html">V-1-0-0 3D</option>
+        <option value="version/V-1-0-0_embeddings_umap_2d.html">V-1-0-0 2D</option>
+    </select>
+
+    
     
 
 </body>
