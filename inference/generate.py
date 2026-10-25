@@ -164,7 +164,8 @@ def generate_from_prompt(model: torch.nn.Module, tokenizer, prompt: str, max_new
             initial_tokens=input_tokens,
             max_length=max_length,
             temperature=temperature,
-            top_k=top_k
+            top_k=top_k,
+            eos_token_id=tokenizer.get_token_to_id().get("<EOS>")
         )
 
     token_ids = out_tokens[0].detach().cpu().tolist()

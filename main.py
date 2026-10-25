@@ -485,9 +485,7 @@ def _build_dataloaders(tokenizer_model, device: torch.device):
     print(f"[main] nb tokens encodes: {n_tokens}")
 
     if n_tokens <= SEQ_LENGTH + 1:
-        raise ValueError(
-            f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. tokens={n_tokens}"
-        )
+        raise ValueError(f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. tokens={n_tokens}")
 
     val_manifest = PREPARED_CACHE_DIR / "val_tokens.json"
     val_tokens = None
@@ -507,7 +505,7 @@ def _build_dataloaders(tokenizer_model, device: torch.device):
         batch_size=batch_size,
         num_workers=DATALOADER_NUM_WORKERS,
         pin_memory=device.type == "cuda",
-        persistent_workers=DATALOADER_NUM_WORKERS > 0,
+        persistent_workers=DATALOADER_NUM_WORKERS > 0
     )
 
     sampler = ResumableRandomSampler(len(train_ds), seed=SEED, replacement=LOW_RAM_MODE)

@@ -58,6 +58,7 @@ CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 def clean_text(value):
     if not isinstance(value, str):
         return ""
+    
     text = CONTROL_CHARS.sub(" ", value).replace("\r\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{4,}", "\n\n\n", text)
@@ -66,6 +67,7 @@ def clean_text(value):
 
 def document_id(doc, text):
     value = doc.get("id")
+    
     if value is not None and str(value).strip():
         return str(value)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -77,6 +79,15 @@ def is_validation(doc_id, percent):
 
 
 def stream_documents(split, seed):
+    """ Itère sur les documents d'un split du dataset, en nettoyant le texte et en ignorant les documents trop courts.
+
+    Args:
+        split (str): Nom du split du dataset à utiliser (ex: "fr")
+        seed (int): Graine pour le mélange aléatoire des documents
+
+    Yields:
+        tuple[str, str]: Un tuple contenant l'ID du document et son texte nettoyé.
+    """
     dataset = load_dataset(
         DATASET_NAME,
         DATASET_CONFIG,
@@ -118,12 +129,23 @@ def write_tokenizer_sample(split, seed, output_path, sample_bytes, val_percent):
 
 
 def iter_jsonl(path):
+    """ Itère sur les documents d'un fichier JSONL, en nettoyant le texte et en ignorant les lignes vides.
+
+    Args:
+        path (Path): Chemin vers le fichier JSONL
+
+    Yields:
+        tuple[str, str]: Un tuple contenant l'ID du document et son texte nettoyé.
+    """
+
     with path.open("r", encoding="utf-8") as source:
+
         for line in source:
             if not line.strip():
                 continue
             item = json.loads(line)
             text = item.get("text", "")
+
             if text:
                 yield str(item.get("id", "")), text
 
@@ -148,37 +170,42 @@ def write_jsonl_and_count(split, seed, output_dir, cache_dir, token_budget, toke
         "train": (output_dir / "train.jsonl").open("w", encoding="utf-8"),
         "val": (output_dir / "val.jsonl").open("w", encoding="utf-8")
     }
-    binary_handles = {
-        split_name: (cache_dir / f"{split_name}_tokens.bin").open("wb")
-        for split_name in ("train", "val")
-    }
+
+    binary_handles = {split_name: (cache_dir / f"{split_name}_tokens.bin").open("wb") for split_name in ("train", "val")}
     buffers = {"train": array("i"), "val": array("i")}
 
     counts = {"train": 0, "val": 0}
     documents = 0
     try:
         with tqdm(total=token_budget, desc="Collecting and encoding", unit="tok") as progress:
+
             for doc_id, text in stream_documents(split, seed):
                 encoded = tokenizer.encode(text)
                 encoded.append(tokenizer.get_token_to_id()[EOS_TOKEN])
                 encoded_count = len(encoded)
+                
                 if counts["train"] + counts["val"] >= token_budget:
                     break
+
                 target = "val" if is_validation(doc_id, val_percent) else "train"
                 handles[target].write(json.dumps({"id": doc_id, "text": text}, ensure_ascii=False) + "\n")
                 buffers[target].extend(encoded)
                 counts[target] += encoded_count
                 documents += 1
                 progress.update(encoded_count)
+
                 if len(buffers[target]) >= 1_000_000:
                     buffers[target].tofile(binary_handles[target])
                     buffers[target] = array("i")
     finally:
         for handle in handles.values():
             handle.close()
+
         for split_name, handle in binary_handles.items():
+
             if buffers[split_name]:
                 buffers[split_name].tofile(handle)
+
             handle.close()
             (cache_dir / f"{split_name}_tokens.json").write_text(
                 json.dumps(
@@ -190,7 +217,7 @@ def write_jsonl_and_count(split, seed, output_dir, cache_dir, token_budget, toke
                     },
                     indent=2,
                 ),
-                encoding="utf-8",
+                encoding="utf-8"
             )
     return documents, counts["train"], counts["val"]
 
@@ -216,13 +243,16 @@ def encode_jsonl(path, cache_dir, tokenizer, split):
     eos_id = tokenizer.get_token_to_id()[EOS_TOKEN]
 
     with bin_path.open("wb") as output:
+
         for _, text in tqdm(iter_jsonl(path), desc=f"Encoding {split}"):
             buffer.extend(tokenizer.encode(text))
             buffer.append(eos_id)
+
             if len(buffer) >= 1_000_000:
                 buffer.tofile(output)
                 token_count += len(buffer)
                 buffer = array("i")
+
         if buffer:
             buffer.tofile(output)
             token_count += len(buffer)
@@ -251,17 +281,27 @@ def parse_args():
     return parser.parse_args()
 
 
-def prepare_dataset(
-    split=DEFAULT_SPLIT,
-    token_budget=DEFAULT_TOKEN_BUDGET,
-    tokenizer_sample_bytes=DEFAULT_TOKENIZER_SAMPLE_BYTES,
-    val_percent=DEFAULT_VAL_PERCENT,
-    seed=DEFAULT_SEED,
-    output_dir=DEFAULT_OUTPUT_DIR,
-    cache_dir=DEFAULT_CACHE_DIR,
-    tokenizer_path=DEFAULT_TOKENIZER_PATH,
-    vocab_size=16_000
-):
+def prepare_dataset(split=DEFAULT_SPLIT, token_budget=DEFAULT_TOKEN_BUDGET, 
+                    tokenizer_sample_bytes=DEFAULT_TOKENIZER_SAMPLE_BYTES, val_percent=DEFAULT_VAL_PERCENT, 
+                    seed=DEFAULT_SEED, output_dir=DEFAULT_OUTPUT_DIR, cache_dir=DEFAULT_CACHE_DIR, 
+                    tokenizer_path=DEFAULT_TOKENIZER_PATH, vocab_size=16_000):
+    """ Prépare le dataset pour l'entraînement d'un modèle de langage.
+
+    Args:
+        split (str, optional): Nom du split à préparer. Defaults to DEFAULT_SPLIT.
+        token_budget (int, optional): Budget de tokens. Defaults to DEFAULT_TOKEN_BUDGET.
+        tokenizer_sample_bytes (int, optional): Nombre d'octets à utiliser pour l'échantillon du tokenizer. Defaults to DEFAULT_TOKENIZER_SAMPLE_BYTES.
+        val_percent (int, optional): Pourcentage de données à utiliser pour la validation. Defaults to DEFAULT_VAL_PERCENT.
+        seed (int, optional): Graine pour la génération aléatoire. Defaults to DEFAULT_SEED.
+        output_dir (Path, optional): Répertoire de sortie. Defaults to DEFAULT_OUTPUT_DIR.
+        cache_dir (Path, optional): Répertoire de cache. Defaults to DEFAULT_CACHE_DIR.
+        tokenizer_path (Path, optional): Chemin vers le tokenizer. Defaults to DEFAULT_TOKENIZER_PATH.
+        vocab_size (int, optional): Taille du vocabulaire. Defaults to 16_000.
+
+    Raises:
+        ValueError: val_percent doit être compris entre 0 et 99
+        ValueError: Le split spécifié n'est pas disponible dans le dataset
+    """
     if not 0 <= val_percent < 100:
         raise ValueError("--val-percent doit etre compris entre 0 et 99")
 
@@ -277,12 +317,14 @@ def prepare_dataset(
     print(f"[prepare:3/6] echantillon termine: {sample_bytes / 1024**2:.1f} MiB dans {sample_path}")
     tokenizer = Tokenizer()
     print(f"[prepare:4/6] entrainement BPE (vocabulaire cible: {vocab_size})")
+
     tokenizer.train(
         (text for _, text in iter_jsonl(sample_path)),
         target_vocab_size=vocab_size,
         min_pair_freq=2,
         verbose=True
     )
+
     tokenizer.save(str(tokenizer_path))
     print(f"[prepare:5/6] tokenizer sauvegarde: {tokenizer_path}")
 
@@ -290,8 +332,10 @@ def prepare_dataset(
     documents, train_budget, val_budget = write_jsonl_and_count(
         split, seed, output_dir, cache_dir, token_budget, tokenizer, val_percent
     )
+
     train_tokens = train_budget
     val_tokens = val_budget
+
     print(f"Prepared {documents} documents ({sample_bytes / 1024**2:.1f} MiB tokenizer sample); "
         f"train={train_tokens} tokens, val={val_tokens} tokens "
         f"(estimated {train_budget}/{val_budget})."
@@ -300,6 +344,7 @@ def prepare_dataset(
 
 def main():
     args = parse_args()
+
     prepare_dataset(
         split=args.split,
         token_budget=args.token_budget,
@@ -309,7 +354,7 @@ def main():
         output_dir=args.output_dir,
         cache_dir=args.cache_dir,
         tokenizer_path=args.tokenizer_path,
-        vocab_size=args.vocab_size,
+        vocab_size=args.vocab_size
     )
 
 

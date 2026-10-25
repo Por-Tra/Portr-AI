@@ -166,7 +166,7 @@ class GPT(nn.Module):
         x = self.final_ln(x)
         return past_kvs, input_tokens.shape[1], self.output_head(x[:, -1, :])
 
-    def generate(self, initial_tokens: torch.Tensor, max_length: int, temperature: float = 1.0, top_k: Optional[int] = None):
+    def generate(self, initial_tokens: torch.Tensor, max_length: int, temperature: float = 1.0, top_k: Optional[int] = None, eos_token_id: Optional[int] = None):
         """
         Génère des tokens avec KV Cache.
 
@@ -183,6 +183,7 @@ class GPT(nn.Module):
             max_length    : Longueur totale visée (prompt inclus)
             temperature   : Contrôle la diversité (< 1.0 = plus conservateur)
             top_k         : Si spécifié, sample parmi les top-k tokens
+            eos_token_id  : Arrête la génération quand ce token est produit.
 
         Returns:
             torch.Tensor: tokens générés de forme [batch_size, max(max_length, prompt_len)]
@@ -199,6 +200,8 @@ class GPT(nn.Module):
             while tokens.shape[1] < max_length:
                 next_token = self._sample(next_logits, temperature, top_k)
                 tokens = torch.cat([tokens, next_token], dim=1)
+                if eos_token_id is not None and torch.all(next_token == eos_token_id):
+                    break
                 if tokens.shape[1] >= max_length:
                     break
 
