@@ -238,3 +238,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+tokenizer_sample.jsonl
+train.jsonl
+val.jsonl

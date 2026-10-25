@@ -56,9 +56,8 @@ flowchart LR
 
 | Stage | What it does | Output |
 |---|---|---|
-| Collection | Gathers raw text into a SQLite database | `crawler.db` |
-| Cleaning | Sentence-aware chunking and near-duplicate removal | `dataset.jsonl` |
-| Tokenization | Trains the BPE model and encodes the corpus into a binary cache | `bpe_model.json` |
+| Data preparation | Streams Fineweb2-HQ, filters lightly, splits by document hash, trains BPE on a sample, and encodes with EOS | `train.jsonl`, `val.jsonl`, `*.bin` |
+| Tokenization | BPE model trained only on the tokenizer sample | `bpe_model.json` |
 | Training | Next-token prediction on sliding windows | checkpoints, final model |
 | Inference | Autoregressive generation with KV cache | generated text |
 
@@ -118,27 +117,21 @@ pip install pdfminer.six libzim
 
 ## Usage
 
-### 1. Data collection
+### 1. Data preparation
 
-Raw text comes from an async web crawler (`crawl.py`) and from local files (`ingest_local.py`: PDF, TXT, Markdown, Wikipedia ZIM).
-
-```bash
-python crawl.py --url https://example.com
-python ingest_local.py --dir ./my_documents -r
-python ingest_local.py --files wikipedia_fr.zim     # full French Wikipedia (Kiwix), can take several hours
-```
-
-### 2. Cleaning and preprocessing
+The complete data pipeline is in `prepare_data.py`. It first checks the available
+Fineweb2-HQ split names, then streams the selected split, trains the BPE tokenizer
+on a small sample, separates validation documents by a stable hash of `id`, and
+encodes each document with `<EOS>` into memory-mappable `int32` files.
 
 ```bash
-python clean_db.py --stats          # database statistics
-python clean_db.py --all            # full cleanup and export
-python build_clean_dataset.py       # build the clean training dataset
+python prepare_data.py --split fr --token-budget 500000000
 ```
 
-Chunking is sentence-aware (no mid-sentence cuts) and near-duplicates are detected with Jaccard 8-gram fingerprinting. Thresholds are listed in [Configuration](#configuration).
+The generated files are `data/datasets/train.jsonl`, `data/datasets/val.jsonl`,
+`artifacts/cache/train_tokens.bin`, and `artifacts/cache/val_tokens.bin`.
 
-### 3. Training
+### 2. Training
 
 ```bash
 python main.py
@@ -156,7 +149,7 @@ Training resumes automatically from the last checkpoint when `RESUME_FROM_CHECKP
   <img src="asset/courbe2.png" width="48%" alt="Training curves, plot 2"/>
 </p>
 
-### 4. Inference
+### 3. Inference
 
 Inference runs at the end of `main.py`, or on its own from the saved model by setting `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. An interactive reprompt mode then lets you test several prompts without restarting the pipeline:
 
@@ -213,16 +206,14 @@ All parameters are centralized in `main.py` unless stated otherwise. Warmup is c
 | `INFER_TEMPERATURE` | 0.9 | Sampling temperature |
 | `INFER_TOP_K` | 20 | Top-k sampling |
 
-**Data** (command-line options)
+**Data preparation** (command-line options)
 
 | Option | Value | Description |
 |---|---|---|
-| `--chunk-size` | 700 | Chunk size, in words |
-| `--chunk-overlap` | 0 | Overlap between chunks |
-| `--min-chars` | 180 | Minimum chunk length, in characters |
-| `--near-dup-threshold` | 0.8 | Jaccard similarity threshold for near-duplicates |
-| `--remove-short` | 100 | Remove pages under 100 words (`clean_db.py`) |
-| `--commit-every` / `--progress-every` | 200 / 250 | Commit and progress frequency for large ZIM ingestion |
+| `--split` | `fr` | Split checked against the configuration's available splits |
+| `--token-budget` | 500M | Approximate maximum number of encoded tokens |
+| `--tokenizer-sample-bytes` | 300 MiB | Raw sample used to train the BPE |
+| `--val-percent` | 1 | Hash bucket percentage reserved for validation |
 
 ---
 
@@ -234,7 +225,7 @@ All parameters are centralized in `main.py` unless stated otherwise. Warmup is c
 | Attention | Flash Attention (`sdpa`), KV cache, `is_causal` disabled during decode | 2-4x less VRAM, no recomputation of past tokens |
 | Training | Mixed precision with `GradScaler`, gradient accumulation, fused AdamW with decay/no-decay groups, cosine schedule with warmup | Stable training and a large effective batch on limited VRAM |
 | I/O | Asynchronous checkpoints in a daemon thread, deferred `loss.item()` | No blocking on disk writes or GPU-CPU sync |
-| Data | Sentence-aware chunking, Jaccard near-dedup, streaming encoding, memory-mapped binary cache (`int32`) | Corpus never fully loaded in RAM |
+| Data | Lightweight filtering, document-hash validation split, EOS-separated streaming encoding, memory-mapped binary cache (`int32`) | Corpus never fully loaded in RAM |
 
 The `is_causal` flag must be `False` during decode (when `past_kv is not None`), otherwise the whole KV cache is masked out and ignored.
 
@@ -245,16 +236,14 @@ The `is_causal` flag must be `False` during decode (when `past_kv is not None`),
 ```
 Portr-AI/
 ├── main.py                  # Pipeline entry point and configuration
-├── data/                    # Dataset (sliding windows), SQLite storage, clean corpus
+├── data/                    # JSONL samples and PyTorch dataset windows
 ├── tokenizer/               # BPE from scratch and saved model
 ├── model/                   # Embedding, attention, transformer block, GPT model
 ├── training/                # Training loop, loss, optimizer
 ├── inference/               # Text generation with KV cache
 ├── artifacts/               # Checkpoints, final model, binary token cache
 ├── asset/                   # README images
-├── ingest_local.py          # Local file ingestion
-├── build_clean_dataset.py   # Clean dataset builder
-└── clean_db.py              # Database audit and cleanup
+└── prepare_data.py          # Fineweb2-HQ streaming, tokenizer, and encoding
 ```
 
 ---
@@ -334,17 +323,17 @@ Les sources de données, le tokenizer et les filtres de qualité sont configuré
 
 ```mermaid
 flowchart LR
-    A["Collecte<br/>sources web et locales"] --> B["Nettoyage<br/>découpage, dédoublonnage"]
-    B --> C["Tokenisation<br/>BPE from scratch"]
+    A["Préparation<br/>Fineweb2-HQ streaming"] --> B["Tokenisation<br/>BPE sur échantillon"]
+    B --> C["Encodage<br/>EOS + cache int32"]
     C --> D["Entraînement<br/>AdamW, AMP, checkpoints"]
     D --> E["Inférence<br/>KV cache, échantillonnage top-k"]
 ```
 
 | Étape | Rôle | Sortie |
 |---|---|---|
-| Collecte | Rassemble le texte brut dans une base SQLite | `crawler.db` |
-| Nettoyage | Découpage par phrases et suppression des quasi-doublons | `dataset.jsonl` |
-| Tokenisation | Entraîne le modèle BPE et encode le corpus dans un cache binaire | `bpe_model.json` |
+| Préparation | Filtre légèrement et sépare train/validation par hash de `id` | `train.jsonl`, `val.jsonl` |
+| Tokenisation | Entraîne le modèle BPE sur un échantillon limité | `bpe_model.json` |
+| Encodage | Encode en streaming avec `<EOS>` entre les documents | `train_tokens.bin`, `val_tokens.bin` |
 | Entraînement | Prédiction du token suivant sur fenêtres glissantes | checkpoints, modèle final |
 | Inférence | Génération auto-régressive avec KV cache | texte généré |
 
@@ -394,37 +383,25 @@ Pour l'entraînement sur GPU, installer PyTorch avec la commande officielle corr
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Support optionnel des PDF et des ZIM Wikipedia :
-
-```bash
-pip install pdfminer.six libzim
-```
-
 ---
 
 ## Utilisation
 
-### 1. Collecte de données
+### 1. Préparation des données
 
-Le texte brut provient d'un crawler web asynchrone (`crawl.py`) et de fichiers locaux (`ingest_local.py` : PDF, TXT, Markdown, ZIM Wikipedia).
-
-```bash
-python crawl.py --url https://example.com
-python ingest_local.py --dir ./mes_documents -r
-python ingest_local.py --files wikipedia_fr.zim     # Wikipedia FR complète (Kiwix), plusieurs heures possibles
-```
-
-### 2. Nettoyage et prétraitement
+`prepare_data.py` vérifie d’abord les splits de `Fineweb2-HQ`, échantillonne le
+corpus en streaming, entraîne le BPE sur quelques centaines de Mo, réserve la
+validation selon le hash stable de `id`, puis écrit un token `<EOS>` entre les
+documents dans les caches `int32`.
 
 ```bash
-python clean_db.py --stats          # statistiques de la base
-python clean_db.py --all            # nettoyage complet et export
-python build_clean_dataset.py       # construction du dataset propre
+python prepare_data.py --split fr --token-budget 500000000
 ```
 
-Le découpage respecte les phrases (aucune coupure en milieu de phrase) et les quasi-doublons sont détectés par empreintes de 8-grammes (similarité de Jaccard). Les seuils sont indiqués dans [Paramètres](#paramètres).
+Sorties : `data/datasets/train.jsonl`, `data/datasets/val.jsonl`,
+`artifacts/cache/train_tokens.bin` et `artifacts/cache/val_tokens.bin`.
 
-### 3. Entraînement
+### 2. Entraînement
 
 ```bash
 python main.py
@@ -442,7 +419,7 @@ L'entraînement reprend automatiquement depuis le dernier checkpoint si `RESUME_
   <img src="asset/courbe2.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>
 </p>
 
-### 4. Inférence
+### 3. Inférence
 
 L'inférence s'exécute à la fin de `main.py`, ou seule à partir du modèle sauvegardé en réglant `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. Un mode interactif permet ensuite de tester plusieurs prompts sans relancer le pipeline :
 
@@ -499,16 +476,14 @@ Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. L
 | `INFER_TEMPERATURE` | 0.9 | Température d'échantillonnage |
 | `INFER_TOP_K` | 20 | Échantillonnage top-k |
 
-**Données** (options en ligne de commande)
+**Préparation des données** (options en ligne de commande)
 
 | Option | Valeur | Description |
 |---|---|---|
-| `--chunk-size` | 700 | Taille des chunks, en mots |
-| `--chunk-overlap` | 0 | Chevauchement entre chunks |
-| `--min-chars` | 180 | Longueur minimale d'un chunk, en caractères |
-| `--near-dup-threshold` | 0.8 | Seuil de similarité de Jaccard pour les quasi-doublons |
-| `--remove-short` | 100 | Supprime les pages de moins de 100 mots (`clean_db.py`) |
-| `--commit-every` / `--progress-every` | 200 / 250 | Fréquence de commit et d'affichage pour les gros ZIM |
+| `--split` | `fr` | Split vérifié parmi ceux disponibles pour la configuration |
+| `--token-budget` | 500M | Budget approximatif de tokens encodés |
+| `--tokenizer-sample-bytes` | 300 MiB | Échantillon brut utilisé pour entraîner le BPE |
+| `--val-percent` | 1 | Pourcentage de buckets hash réservé à la validation |
 
 ---
 
@@ -520,7 +495,7 @@ Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. L
 | Attention | Flash Attention (`sdpa`), KV cache, `is_causal` désactivé au décodage | 2 à 4 fois moins de VRAM, aucun recalcul du passé |
 | Entraînement | Précision mixte avec `GradScaler`, accumulation de gradients, AdamW fusionné avec groupes decay/no-decay, schedule cosinus avec warmup | Entraînement stable et grand batch effectif malgré une VRAM limitée |
 | E/S | Checkpoints asynchrones dans un thread daemon, `loss.item()` différé | Pas de blocage sur les écritures disque ni de synchronisation GPU-CPU |
-| Données | Découpage par phrases, quasi-dédoublonnage Jaccard, encodage en streaming, cache binaire mémoire-mappé (`int32`) | Corpus jamais chargé entièrement en RAM |
+| Données | Filtre léger, split validation par hash de document, EOS entre documents, encodage en streaming, cache binaire mémoire-mappé (`int32`) | Corpus jamais chargé entièrement en RAM |
 
 Le flag `is_causal` doit être à `False` au décodage (quand `past_kv is not None`), sinon tout le KV cache est masqué et ignoré.
 
@@ -531,16 +506,14 @@ Le flag `is_causal` doit être à `False` au décodage (quand `past_kv is not No
 ```
 Portr-AI/
 ├── main.py                  # Point d'entrée du pipeline et configuration
-├── data/                    # Dataset (fenêtres glissantes), stockage SQLite, corpus propre
+├── data/                    # JSONL et fenêtres glissantes PyTorch
 ├── tokenizer/               # BPE from scratch et modèle sauvegardé
 ├── model/                   # Embedding, attention, bloc Transformer, modèle GPT
 ├── training/                # Boucle d'entraînement, loss, optimiseur
 ├── inference/               # Génération de texte avec KV cache
 ├── artifacts/               # Checkpoints, modèle final, cache binaire de tokens
 ├── asset/                   # Images du README
-├── ingest_local.py          # Ingestion de fichiers locaux
-├── build_clean_dataset.py   # Construction du dataset propre
-└── clean_db.py              # Audit et nettoyage de la base
+└── prepare_data.py          # Fineweb2-HQ, tokenizer et encodage
 ```
 
 ---

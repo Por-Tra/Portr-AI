@@ -20,6 +20,7 @@ description du script:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
 from pathlib import Path
 import math
 import os
@@ -64,6 +65,7 @@ class TrainConfig:
     #* Validation
     eval_interval: int = 0                   #& en optimizer steps (0 = seulement en fin d'epoch)
     eval_max_batches: int | None = 200
+    benchmark_path: str = "artifacts/benchmarks/training_benchmark.csv"
 
     #* torch.compile (nécessite Triton : Linux, ou triton-windows sous Windows)
     compile_model: bool = False
@@ -495,6 +497,81 @@ def _seed_epoch(dataloader, seed: int, epoch: int, start_batch: int):
 
 
 #* ---------------------------------------------------------------------------
+#* Benchmark
+#* ---------------------------------------------------------------------------
+
+def training_benchmark(epoch, batch,step, loss, LR, grad_norm, elapsed_seconds=None, tokens_per_second=None, val_loss=None, event="train", path="artifacts/benchmarks/training_benchmark.csv",):
+    """ Enregistre les métriques d'entraînement dans un fichier CSV pour le suivi des performances.
+
+    Args:
+        epoch (_type_): _description_
+        batch (_type_): _description_
+        step (_type_): _description_
+        loss (_type_): _description_
+        LR (_type_): _description_
+        grad_norm (_type_): _description_
+        elapsed_seconds (_type_, optional): _description_. Defaults to None.
+        tokens_per_second (_type_, optional): _description_. Defaults to None.
+        path (str, optional): _description_. Defaults to "artifacts/benchmarks/training_benchmark.csv".
+    """
+    benchmark_path = Path(path)
+    benchmark_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "timestamp",
+        "epoch",
+        "batch",
+        "step",
+        "event",
+        "loss",
+        "val_loss",
+        "learning_rate",
+        "grad_norm",
+        "elapsed_seconds",
+        "tokens_per_second",
+    ]
+
+    should_migrate = False
+    migrated_rows = []
+    if benchmark_path.exists() and benchmark_path.stat().st_size > 0:
+        with benchmark_path.open("r", newline="", encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            old_fieldnames = reader.fieldnames or []
+            if set(fieldnames) - set(old_fieldnames):
+                for row in reader:
+                    row.setdefault("event", "train")
+                    row.setdefault("val_loss", "")
+                    migrated_rows.append(row)
+                should_migrate = True
+
+    if should_migrate:
+        temporary_path = benchmark_path.with_suffix(".csv.tmp")
+        with temporary_path.open("w", newline="", encoding="utf-8") as output:
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(migrated_rows)
+        os.replace(temporary_path, benchmark_path)
+
+    needs_header = not benchmark_path.exists() or benchmark_path.stat().st_size == 0
+
+    with benchmark_path.open("a", newline="", encoding="utf-8") as output:
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow({
+            "timestamp": time.time(),
+            "epoch": int(epoch),
+            "batch": int(batch),
+            "step": int(step),
+            "event": event,
+            "loss": "" if loss is None else float(loss),
+            "val_loss": "" if val_loss is None else float(val_loss),
+            "learning_rate": float(LR),
+            "grad_norm": float(grad_norm),
+            "elapsed_seconds": "" if elapsed_seconds is None else float(elapsed_seconds),
+            "tokens_per_second": "" if tokens_per_second is None else float(tokens_per_second),
+        })
+
+#* ---------------------------------------------------------------------------
 #* Boucle principale
 #* ---------------------------------------------------------------------------
 
@@ -531,10 +608,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     optim_steps_per_epoch = math.ceil(steps_per_epoch / accum)
     total_steps = optim_steps_per_epoch * config.epochs
 
-    warmup_steps = (
-        int(total_steps * config.warmup_ratio)
-        if config.warmup_ratio is not None else int(config.warmup_steps)
-    )
+    warmup_steps = (int(total_steps * config.warmup_ratio) if config.warmup_ratio is not None else int(config.warmup_steps))
     config.warmup_steps = warmup_steps
 
     use_amp = config.use_amp and device.type == "cuda"
@@ -548,7 +622,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         f"| total_steps={total_steps} | warmup={warmup_steps}"
     )
 
-    ckpt_path        = Path(config.checkpoint_dir) / config.checkpoint_name
+    ckpt_path = Path(config.checkpoint_dir) / config.checkpoint_name
     final_model_path = Path(config.final_model_dir) / config.final_model_name
 
     history: dict = {
@@ -573,12 +647,28 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     history["epoch_losses"].extend(restored_losses)
     history["val_losses"].extend(restored_val)
 
+    last_train_loss = None
+    last_learning_rate = 0.0
+    last_grad_norm = 0.0
+
     def _run_eval(tag: str): #& fonction interne pour évaluation périodique
+        nonlocal last_train_loss, last_learning_rate, last_grad_norm
         if val_dataloader is None:
             return
         val_loss = evaluate(model, val_dataloader, eval_loss_fn, device, use_amp, amp_dtype, config.eval_max_batches)
         history["val_losses"].append(val_loss)
         ppl = math.exp(min(val_loss, 50.0))
+        training_benchmark(
+            epoch=epoch + 1,
+            batch=0,
+            step=global_step,
+            loss=last_train_loss,
+            val_loss=val_loss,
+            LR=last_learning_rate,
+            grad_norm=last_grad_norm,
+            event="validation",
+            path=config.benchmark_path,
+        )
         print(f"[eval] {tag} step={global_step} val_loss={val_loss:.4f} val_ppl={ppl:.2f}")
 
     # * Boucle d'entraînement *
@@ -597,6 +687,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         log_loss_accum = torch.zeros((), device=device)
         log_steps = 0
         start_t = time.time()
+        last_log_t = start_t
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -674,11 +765,29 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
                 log_sum = float(log_loss_accum.item())
                 running_loss += log_sum
                 avg_log_loss = log_sum / max(log_steps, 1)
+                logged_steps = log_steps
+                log_elapsed = max(time.time() - last_log_t, 1e-9)
+                last_log_t = time.time()
                 log_loss_accum.zero_()
                 log_steps = 0
 
                 current_lr = scheduler.get_last_lr()[0]
                 gn = float(grad_norm.item()) if grad_norm is not None else 0.0
+                tokens_per_second = logged_steps * x.numel() / log_elapsed
+                last_train_loss = avg_log_loss
+                last_learning_rate = current_lr
+                last_grad_norm = gn
+                training_benchmark(
+                    epoch=epoch + 1,
+                    batch=batch_idx + 1,
+                    step=global_step,
+                    loss=avg_log_loss,
+                    LR=current_lr,
+                    grad_norm=gn,
+                    elapsed_seconds=log_elapsed,
+                    tokens_per_second=tokens_per_second,
+                    path=config.benchmark_path,
+                )
                 print(
                     f"[train] epoch={epoch + 1}/{config.epochs} "
                     f"batch={batch_idx + 1}/{steps_per_epoch} "
