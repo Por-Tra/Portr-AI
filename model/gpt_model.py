@@ -106,6 +106,43 @@ class GPT(nn.Module):
         #& l'explosion du signal à l'init sur des réseaux profonds.
         self._apply_scaled_init()
 
+    def resize_token_embeddings(self, new_vocab_size):
+        """Agrandit l'embedding de tokens en conservant les poids existants.
+
+        Les nouvelles lignes sont initialisees comme l'embedding GPT-2, puis
+        la tete de sortie est recreee et liee au nouvel embedding.
+
+        Args:
+            new_vocab_size (int): Nouvelle taille du vocabulaire (doit être >= vocab_size actuel).
+
+        Raises:
+            ValueError: Si la nouvelle taille du vocabulaire est inférieure à la taille actuelle.
+        """
+        if new_vocab_size < self.vocab_size:
+            raise ValueError(f"Le nouveau vocabulaire ({new_vocab_size}) ne peut pas etre plus petit que l'ancien ({self.vocab_size}).")
+        
+        if new_vocab_size == self.vocab_size:
+            return
+
+        old_token_emb = self.embedding.token_emb
+        new_token_emb = nn.Embedding(new_vocab_size, self.embedding_dim, device=old_token_emb.weight.device, dtype=old_token_emb.weight.dtype)
+        nn.init.normal_(new_token_emb.weight, mean=0.0, std=0.02)
+        with torch.no_grad():
+            new_token_emb.weight[: self.vocab_size].copy_(old_token_emb.weight)
+
+        self.embedding.token_emb = new_token_emb
+        self.embedding.vocab_size = new_vocab_size
+        self.vocab_size = new_vocab_size
+
+        self.output_head = nn.Linear(
+            self.embedding_dim,
+            new_vocab_size,
+            bias=False,
+            device=new_token_emb.weight.device,
+            dtype=new_token_emb.weight.dtype
+        )
+        self.output_head.weight = self.embedding.token_emb.weight
+
     def _apply_scaled_init(self) -> None:
         """Applique l'init GPT-2 avec scaling sur projections residuelles."""
         #& 1. Marquer les projections résiduelles
