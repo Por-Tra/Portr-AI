@@ -145,8 +145,9 @@ The interactive pipeline asks for:
 Training resumes automatically from the last checkpoint when `RESUME_FROM_CHECKPOINT = True`. Curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be viewed with TensorBoard.
 
 <p align="center">
-  <img src="asset/courbe.png" width="48%" alt="Training curves, plot 1"/>
-  <img src="asset/courbe2.png" width="48%" alt="Training curves, plot 2"/>
+  <img src="asset/grad_norm.png" width="48%" alt="Norme des gradients"/>
+  <img src="asset/loss.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>
+  <img src="asset/LR.png" width="48%" alt="Learning Rate"/>
 </p>
 
 ### 3. Inference
@@ -415,8 +416,9 @@ Le pipeline interactif demande :
 L'entraînement reprend automatiquement depuis le dernier checkpoint si `RESUME_FROM_CHECKPOINT = True`. Les courbes (loss, perplexité, learning rate) sont sauvegardées dans `artifacts/` et visualisables avec TensorBoard.
 
 <p align="center">
-  <img src="asset/courbe.png" width="48%" alt="Courbes d'entraînement, graphique 1"/>
-  <img src="asset/courbe2.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>
+  <img src="asset/grad_norm.png" width="48%" alt="Norme des gradients"/>
+  <img src="asset/loss.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>
+  <img src="asset/LR.png" width="48%" alt="Learning Rate"/>
 </p>
 
 ### 3. Inférence
@@ -549,3 +551,9 @@ Portr-AI/
 ## Auteur et licence
 
 **Lucas** — projet personnel d'apprentissage et d'implémentation from scratch d'un LLM en français. Publié sous licence MIT.
+
+---
+Dataset instruction/réponse
+> https://huggingface.co/datasets/angeluriot/french_instruct
+Angel Uriot : Creator of the project.
+---
