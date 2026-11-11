@@ -243,9 +243,9 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
         _atomic_save(payload, checkpoint_path)
 
 
-def load_checkpoint_if_available(model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, 
-                                 checkpoint_path: Path, resume: bool, 
-                                 scaler: torch.amp.GradScaler | None = None):
+def load_checkpoint_if_available(model, optimizer, scheduler, 
+                                 checkpoint_path, resume, 
+                                 scaler = None, target_epochs = None):
     """ Charge un checkpoint d'entraînement si disponible et compatible avec le modèle actuel.
 
     Args:
@@ -266,6 +266,8 @@ def load_checkpoint_if_available(model: torch.nn.Module, optimizer: torch.optim.
         return 0, 0, 0, [], []
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if target_epochs is not None and int(payload.get("epoch", 0)) >= target_epochs:
+        raise RuntimeError(f"Entrainement deja termine: checkpoint epoch={payload.get('epoch')} \n pour target_epochs={target_epochs}. Utiliser un nouveau run pour \n repartir du modele de base (option 10 pour SFT), ou definir \n explicitement une nouvelle cible et son schedule pour continuer.")
     try:
         model.load_state_dict(payload["model_state_dict"])
     except RuntimeError as exc:
@@ -464,12 +466,17 @@ def evaluate(model: torch.nn.Module, dataloader, loss_fn, device: torch.device, 
             break
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
+        supervised = int((y != -100).sum().item())
+        if supervised == 0:
+            continue
         with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
-            total += loss_fn(model(x), y).float()
-        count += 1
+            total += loss_fn(model(x), y).float() * supervised
+        count += supervised
     if was_training:
         model.train()
-    return float(total.item()) / max(count, 1)
+    if count == 0:
+        raise ValueError("Validation sans token supervise.")
+    return float(total.item()) / count
 
 
 def _seed_epoch(dataloader, seed: int, epoch: int, start_batch: int):
@@ -642,7 +649,8 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         scheduler=scheduler,
         checkpoint_path=ckpt_path,
         resume=config.resume_from_checkpoint,
-        scaler=scaler
+        scaler=scaler,
+        target_epochs=config.epochs
     )
     history["epoch_losses"].extend(restored_losses)
     history["val_losses"].extend(restored_val)

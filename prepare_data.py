@@ -47,9 +47,11 @@ DEFAULT_TOKENIZER_SAMPLE_BYTES = 300 * 1024 * 1024
 DEFAULT_TOKEN_BUDGET = 500_000_000
 DEFAULT_VAL_PERCENT = 1
 DEFAULT_SEED = 42
-DEFAULT_OUTPUT_DIR = Path("data/datasets")
-DEFAULT_CACHE_DIR = Path("artifacts/cache")
-DEFAULT_TOKENIZER_PATH = Path("tokenizer/token/bpe_model.json")
+ROOT_DIR = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_DIR = ROOT_DIR / "data/datasets"
+DEFAULT_CACHE_DIR = ROOT_DIR / "artifacts/cache"
+DEFAULT_TOKENIZER_PATH = ROOT_DIR / "tokenizer/token/bpe_model.json"
+PREPARATION_PENDING_NAME = ".preparation_in_progress"
 EOS_TOKEN = "<EOS>"
 
 CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -166,6 +168,8 @@ def write_jsonl_and_count(split, seed, output_dir, cache_dir, token_budget, toke
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = cache_dir / PREPARATION_PENDING_NAME
+    pending_path.write_text("Preparation incomplete: ne pas utiliser les caches.\n", encoding="utf-8")
     handles = {
         "train": (output_dir / "train.jsonl").open("w", encoding="utf-8"),
         "val": (output_dir / "val.jsonl").open("w", encoding="utf-8")
@@ -207,18 +211,22 @@ def write_jsonl_and_count(split, seed, output_dir, cache_dir, token_budget, toke
                 buffers[split_name].tofile(handle)
 
             handle.close()
-            (cache_dir / f"{split_name}_tokens.json").write_text(
-                json.dumps(
-                    {
-                        "split": split_name,
-                        "token_count": counts[split_name],
-                        "dtype": "int32",
-                        "bin_path": str(cache_dir / f"{split_name}_tokens.bin"),
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8"
-            )
+    # Publish manifests only after the entire stream and file closing succeeded.
+    # On error the pending marker remains, even if older manifests still exist.
+    for split_name in ("train", "val"):
+        (cache_dir / f"{split_name}_tokens.json").write_text(
+            json.dumps(
+                {
+                    "split": split_name,
+                    "token_count": counts[split_name],
+                    "dtype": "int32",
+                    "bin_path": str(cache_dir / f"{split_name}_tokens.bin"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8"
+        )
+    pending_path.unlink()
     return documents, counts["train"], counts["val"]
 
 
@@ -311,6 +319,10 @@ def prepare_dataset(split=DEFAULT_SPLIT, token_budget=DEFAULT_TOKEN_BUDGET,
     if split not in available_splits:
         raise ValueError(f"Split '{split}' absent. Choisir parmi: {available_splits}")
 
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / PREPARATION_PENDING_NAME).write_text(
+        "Preparation incomplete: tokenizer et caches en cours de remplacement.\n", encoding="utf-8"
+    )
     sample_path = output_dir / "tokenizer_sample.jsonl"
     print(f"[prepare:2/6] echantillonnage du split '{split}' ({tokenizer_sample_bytes / 1024**2:.0f} MiB maximum)")
     sample_bytes = write_tokenizer_sample(split, seed, sample_path, tokenizer_sample_bytes, val_percent)

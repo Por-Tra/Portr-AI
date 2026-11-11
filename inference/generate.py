@@ -38,10 +38,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from model.gpt_model import GPT
+from tokenizer.tokenizer import SPACE_TOKEN
 
 
 #! Tokens spéciaux à ignorer au décodage
-_SPECIAL_TOKENS = {"<PAD>", "<UNK>", "<BOS>", "<EOS>"}
+_SPECIAL_TOKENS = {"<PAD>", "<UNK>", "<BOS>", "<EOS>", "<|user|>", "<|assistant|>", "<|end|>"}
 
 
 def load_model_checkpoint(model: torch.nn.Module,checkpoint_path: str | Path,map_location: str = "cpu") -> dict:
@@ -60,16 +61,16 @@ def load_model_checkpoint(model: torch.nn.Module,checkpoint_path: str | Path,map
     return payload
 
 
-def load_model_from_final_state( final_model_path: str | Path, tokenizer, device: str = "cpu") -> tuple[torch.nn.Module, dict]:
+def load_model_from_final_state( final_model_path, tokenizer, device = "cpu"):
     """Reconstruit et charge un modèle GPT depuis l'artefact final d'inférence.
 
     Args:
-        final_model_path : Chemin vers l'artefact final (.pt).
-        tokenizer        : Tokenizer déjà chargé.
-        device           : Device cible pour l'inférence.
+        final_model_path (str | Path): Chemin vers l'artefact final (.pt).
+        tokenizer (Tokenizer): Tokenizer déjà chargé.
+        device (str): Device cible pour l'inférence.
 
     Returns:
-        Tuple (model en eval mode, payload brut).
+        tuple[torch.nn.Module, dict]: model en eval mode, payload brut.
     """
     payload = torch.load(final_model_path, map_location="cpu", weights_only=True)
     hparams = payload.get("model_hparams") or {}
@@ -96,23 +97,23 @@ def load_model_from_final_state( final_model_path: str | Path, tokenizer, device
     return model, payload
 
 
-def decode_token_ids(token_ids: list[int], tokenizer) -> str:
+def decode_token_ids(token_ids, tokenizer):
     """
     Décode une liste d'ids de tokens en texte lisible.
 
     Logique BPE :
-    - Le début de mot est marqué par ▁ (collé au mot) -> converti en espace.
+    - Le début de mot est marqué par _ (ou ▁ dans les anciens modèles) -> espace.
     - Les autres tokens sont concaténés directement.
-    - Les tokens spéciaux (<PAD>, <BOS>, <EOS>, <UNK>) sont ignorés.
+    - Les tokens spéciaux  sont ignorés.
     - Compatibilité anciens modèles : un token finissant par </w> marque la
       fin d'un mot -> marqueur retiré et espace ajouté.
 
     Args:
-        token_ids : Liste d'entiers (ids de tokens).
-        tokenizer : Instance Tokenizer avec get_id_to_token().
+        token_ids (list[int]): Liste d'entiers (ids de tokens).
+        tokenizer (Tokenizer): Instance Tokenizer avec get_id_to_token().
 
     Returns:
-        Texte décodé, nettoyé des espaces superflus.
+        str: Texte décodé, nettoyé des espaces superflus.
     """
     id_to_token = tokenizer.get_id_to_token()
     end_of_word = getattr(tokenizer, "end_of_word", "")
@@ -121,40 +122,89 @@ def decode_token_ids(token_ids: list[int], tokenizer) -> str:
     for idx in token_ids:
         tok = id_to_token.get(int(idx), "<UNK>")
 
-        # Ignorer les tokens spéciaux
+        #& Ignorer les tokens spéciaux
         if tok in _SPECIAL_TOKENS:
             continue
 
         if end_of_word and tok.endswith(end_of_word):
-            pieces.append(tok[: -len(end_of_word)] + " ")
-        else:
-            pieces.append(tok)
+            tok = tok[: -len(end_of_word)] + " "
 
-    text = "".join(pieces).replace("▁", " ")
+        # Le tokenizer actuel encode l'espace comme préfixe `_`.
+        # Convertir le marqueur token par token évite de modifier les `_` internes aux tokens.
+        if tok.startswith(SPACE_TOKEN):
+            tok = " " + tok[len(SPACE_TOKEN):]
+        elif tok.startswith("▁"):
+            tok = " " + tok[1:]
+        pieces.append(tok)
+
+    text = "".join(pieces)
     #& Supprimer les espaces multiples et les espaces en bord de chaîne
     return " ".join(text.split())
 
 
-def generate_from_prompt(model: torch.nn.Module, tokenizer, prompt: str, max_new_tokens: int = 40, temperature: float = 1.0, top_k: Optional[int] = 20, device: str = "cpu"):
-    """Encode un prompt, génère une continuation, puis décode.
+def build_sft_prompt_ids(prompt, tokenizer):
+    """Construit les IDs du template utilisé par prepare_sft_data.py
 
     Args:
-        model          : Modèle GPT en eval mode.
-        tokenizer      : Tokenizer chargé.
-        prompt         : Texte de départ.
-        max_new_tokens : Nombre de nouveaux tokens à générer.
-        temperature    : Température d'échantillonnage (< 1 = plus conservateur).
-        top_k          : Si défini, échantillonne parmi les top-k tokens.
-        device         : Device cible ("cpu", "cuda", ...).
+        prompt (str): Texte de l'instruction à fournir au modèle.
+        tokenizer (Tokenizer): Instance de Tokenizer.
+
+    Raises:
+        ValueError: Si le tokenizer ne contient pas les tokens nécessaires pour le template SFT.
 
     Returns:
-        Tuple (liste d'ids générés, texte décodé).
+        list[int]: Liste des IDs des tokens du template SFT.
+    """
+    token_to_id = tokenizer.get_token_to_id()
+    required_tokens = ("<|user|>", "<|assistant|>", "<|end|>")
+    missing = [token for token in required_tokens if token not in token_to_id]
+
+    if missing: raise ValueError(f"Tokens SFT absents du tokenizer: {', '.join(missing)}")
+
+    return [int(token_to_id["<|user|>"]), *tokenizer.encode(prompt), int(token_to_id["<|assistant|>"])]
+
+
+def generate_from_prompt(model, tokenizer, prompt, max_new_tokens = 40,temperature = 1.0, top_k = 20, device = "cpu", use_sft_template = True):
+    """Encode un prompt, génère une réponse, puis la décode.
+
+    Par défaut, le prompt suit le template SFT <|user|> ... <|assistant|>
+    et la génération s'arrête sur <|end|>. Pour une continuation de corpus
+    pré-entraîné, passer use_sft_template=False.
+
+    Args:
+        model (torch.nn.Module): Modèle GPT en mode évaluation.
+        tokenizer (Tokenizer): Instance de Tokenizer.
+        prompt (str): Texte de départ pour la génération.
+        max_new_tokens (int, optional): Nombre de nouveaux tokens à générer. Defaults to 40.
+        temperature (float, optional): Température d'échantillonnage (< 1 = plus conservateur). Defaults to 1.0.
+        top_k (Optional[int], optional): Si défini, échantillonne parmi les top-k tokens. Defaults to 20.
+        device (str, optional): Device cible ("cpu", "cuda", ...). Defaults to "cpu".
+        use_sft_template (bool, optional): Utilise le template instruction/réponse SFT. Defaults to True.
+
+    Raises:
+        ValueError: Si le modèle ne contient pas les tokens nécessaires pour le template SFT.
+
+    Returns:
+        Tuple[list[int], str]: Liste des IDs des tokens générés et texte décodé.
     """
     model.eval()
 
-    prompt_ids = tokenizer.encode(prompt)
-    if not prompt_ids:
-        prompt_ids = [tokenizer.get_token_to_id().get("<BOS>", 0)]
+    token_to_id = tokenizer.get_token_to_id()
+    if use_sft_template:
+        prompt_ids = build_sft_prompt_ids(prompt, tokenizer)
+        stop_token_id = token_to_id["<|end|>"]
+    else:
+        prompt_ids = tokenizer.encode(prompt)
+        stop_token_id = token_to_id.get("<EOS>")
+
+    if not prompt_ids: 
+        prompt_ids = [token_to_id.get("<BOS>", 0)]
+
+    vocab_size = int(getattr(model, "vocab_size", 0))
+
+    #& Vérification de la compatibilité du vocabulaire
+    if vocab_size and any(token_id >= vocab_size for token_id in prompt_ids):
+        raise ValueError("Le modèle ne contient pas les tokens du template SFT.\nChargez un modèle redimensionné pour le vocabulaire SFT.")
 
     input_tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)
     max_length = len(prompt_ids) + max_new_tokens
@@ -165,9 +215,10 @@ def generate_from_prompt(model: torch.nn.Module, tokenizer, prompt: str, max_new
             max_length=max_length,
             temperature=temperature,
             top_k=top_k,
-            eos_token_id=tokenizer.get_token_to_id().get("<EOS>")
+            eos_token_id=stop_token_id
         )
 
     token_ids = out_tokens[0].detach().cpu().tolist()
-    text = decode_token_ids(token_ids, tokenizer)
+    generated_ids = token_ids[len(prompt_ids):]
+    text = decode_token_ids(generated_ids, tokenizer)
     return token_ids, text

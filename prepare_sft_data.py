@@ -32,13 +32,15 @@ from tokenizer.tokenizer import Tokenizer
 from datasets import load_dataset
 
 DATASET_NAME = "angeluriot/french_instruct"
-DEFAULT_TOKENIZER_PATH = Path("tokenizer/token/bpe_model.json")
-DEFAULT_OUT_PREFIX = Path("artifacts/sft/sft")
+ROOT_DIR = Path(__file__).resolve().parent
+DEFAULT_TOKENIZER_PATH = ROOT_DIR / "tokenizer/token/bpe_model.json"
+DEFAULT_OUT_PREFIX = ROOT_DIR / "artifacts/sft/sft"
 SPECIAL_TOKENS = ("<|user|>", "<|assistant|>", "<|end|>", "<PAD>")
-ALLOWED_SOURCES = ("alpaca", "dolly", "hc3", "lima", "aya", "oasst", "open assistant", "ens sup", "doremiti")
+ALLOWED_SOURCES = ("alpaca", "dolly", "hc3", "human chatgpt comparison corpus", "lima", "less is more for alignment", "aya", "oasst", "open assistant", "ens sup", "doremiti")
 BANNED_IN_ANSWER = ("en tant qu'ia", "en tant qu'assistant", "en tant qu'intelligence artificielle", "en tant que modèle de langage", "chatgpt", "openai", "gpt-3", "gpt-4", "je suis un programme informatique")
 NOISE_MARKERS = ("url_", "\\pos", "\\displaystyle")
 IGNORE_INDEX = -100
+LABEL_ALIGNMENT_VERSION = 3
 
 
 def source_allowed(source):
@@ -129,9 +131,11 @@ def build_example(prompt, answer, encode, special_ids, max_len, min_answer_token
         return None, "trop_long"
 
     #& Construction des labels avec padding et index d'ignorance
-    labels = [IGNORE_INDEX] * (len(prompt_ids) + 2)
+    # Le logit à la position <|assistant|> doit prédire le premier token de réponse.
+    # La dernière position du bloc causal n'a pas de token suivant à prédire.
+    labels = [IGNORE_INDEX] * (len(prompt_ids) + 1)
     labels.extend(answer_ids)
-    labels.append(end_id)
+    labels.extend([end_id, IGNORE_INDEX])
     padding = max_len - len(input_ids)
     input_ids.extend([pad_id] * padding)
     labels.extend([IGNORE_INDEX] * padding)
@@ -303,8 +307,10 @@ def prepare(args: argparse.Namespace):
 
         examples.append(example)
 
+    if len(examples) < 2:
+        raise ValueError("Il faut au moins deux exemples SFT valides pour train et val.")
     rng.shuffle(examples)
-    val = examples[: min(target_val, len(examples))]
+    val = examples[: min(target_val, len(examples) - 1)]
     train = examples[len(val) :]
 
     if args.identity_jsonl:
@@ -348,6 +354,7 @@ def prepare(args: argparse.Namespace):
         "special_tokens": dict(zip(SPECIAL_TOKENS, special_ids)),
         "seq_length": args.seq_length,
         "ignore_index": IGNORE_INDEX,
+        "label_alignment_version": LABEL_ALIGNMENT_VERSION,
         "seed": args.seed,
         "context_mode": args.context_mode,
         "train": train_stats,

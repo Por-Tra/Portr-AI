@@ -243,3 +243,5 @@ tokenizer_sample.jsonl
 train.jsonl
 val.jsonl
 TODO.md
+/me
+/tests

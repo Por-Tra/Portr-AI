@@ -39,9 +39,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from tqdm import tqdm
 
 DEFAULT_MODEL_PATH = "tokenizer/token/bpe_model.json"
-SPACE_TOKEN = "▁"
+SPACE_TOKEN = "_"
 
-DEFAULT_CORPUS_LIMIT = 1_000
+DEFAULT_CORPUS_LIMIT = 1_000    #? défault value - ignore
 
 
 class Tokenizer:
@@ -53,7 +53,7 @@ class Tokenizer:
         self.merges: List[Tuple[str, str]] = []
         self.merge_ranks: Dict[Tuple[str, str], int] = {}
 
-        self.special_tokens = ["<PAD>", "<UNK>", "<BOS>", "<EOS>"]
+        self.special_tokens = ["<PAD>", "<UNK>", "<BOS>", "<EOS>", "<|user|>", "<|assistant|>", "<|end|>"]
         self.vocab.update(self.special_tokens)
 
         self.token_to_id: Dict[str, int] = {}

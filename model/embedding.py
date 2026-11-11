@@ -60,18 +60,20 @@ class Embedding(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, tokens: torch.Tensor, pos_offset: int = 0):
+    def forward(self, tokens, pos_offset = 0):
         """
+        Position embedding avec offset pour l'inference token-par-token (KV cache).
+
         Args:
-            tokens: [batch_size, seq_len] — indices des tokens
-            pos_offset: decalage de position absolue pour l'inference
-                token-par-token (KV cache).
+            tokens(torch.Tensor): [batch_size, seq_len] - indices des tokens
+            pos_offset(int): decalage de position absolue pour l'inference token-par-token (KV cache).
 
         Returns:
             torch.Tensor: Vecteur d'embedding [batch_size, seq_len, embedding_dim]
         """
         _, seq_len = tokens.shape
         end_pos = pos_offset + seq_len
+
         if end_pos > self.seq_length:
             raise ValueError(f"Position out of range: pos_offset={pos_offset}, seq_len={seq_len}, max_seq_length={self.seq_length}")
 
