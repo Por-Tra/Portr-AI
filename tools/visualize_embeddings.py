@@ -1,10 +1,11 @@
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @ChatGPT (LLM)
 
@@ -26,6 +27,7 @@ Pour UMAP :
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -70,7 +72,7 @@ def main():
         raise FileNotFoundError(f"Tokenizer introuvable : {tokenizer_path}")
 
     print(f"Chargement du checkpoint : {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     state = checkpoint.get("model_state_dict", checkpoint)
     key = "embedding.token_emb.weight"
     if key not in state:
@@ -79,6 +81,12 @@ def main():
         )
 
     embeddings = state[key].detach().float().cpu().numpy()
+    if checkpoint.get("tokenizer_fingerprint"):
+        if str(PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(PROJECT_ROOT))
+        from tokenizer.tokenizer import Tokenizer
+        if Tokenizer.load(tokenizer_path).fingerprint(vocab_size=embeddings.shape[0]) != checkpoint["tokenizer_fingerprint"]:
+            raise ValueError("Tokenizer incompatible avec les embeddings sauvegardes")
 
     print(f"Chargement du tokenizer : {tokenizer_path}")
     with tokenizer_path.open("r", encoding="utf-8") as f:
@@ -109,6 +117,8 @@ def main():
         )
 
     n = min(max(1, args.max_points), len(tokens))
+    if n < args.dims:
+        raise ValueError("Nombre de points insuffisant pour la dimension de projection demandee")
 
     X = embeddings[:n]
     labels = tokens[:n]

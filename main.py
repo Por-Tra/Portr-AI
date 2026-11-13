@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -42,6 +43,7 @@ from torch.utils.data import DataLoader
 from tokenizer.tokenizer import Tokenizer
 from data.dataset import TextDataset, ResumableRandomSampler
 from data.sft_dataset import SFTDataset
+from data.artifacts import load_token_cache, file_identity, sha256_file
 from training.loss import autoregressive_cross_entropy, perplexity_from_loss
 from training.optimizer import create_adamw_optimizer
 from training.train import TrainConfig, train_model
@@ -56,7 +58,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from model.gpt_model import GPT
 
-# Model and data configuration
+#* Model and data configuration
 VOCAB_SIZE = 16_000
 SEQ_LENGTH = 256
 SEQ_STRIDE = None
@@ -65,7 +67,7 @@ SEED = 1337
 MAX_CPU_THREADS = 12
 MAX_CPU_INTEROP_THREADS = 6
 
-# Runtime configuration
+#* Runtime configuration
 DEVICE = "auto"
 AMP_DTYPE = "auto"
 ALLOW_TF32 = True
@@ -77,7 +79,7 @@ GRAD_ACCUM_STEPS_CUDA = 2
 BATCH_SIZE_CPU = 8
 GRAD_ACCUM_STEPS_CPU = 4
 
-# Training configuration
+#* Training configuration
 EMBEDDING_DIM = 384
 NUM_HEADS = 8
 NUM_BLOCKS = 4
@@ -96,12 +98,15 @@ CHECKPOINT_EVERY_STEPS = 500
 EVAL_INTERVAL = 1000
 EVAL_MAX_BATCHES = 200
 
-# Loss configuration
+#* Loss configuration
 LOSS_IGNORE_INDEX = -100
 LABEL_SMOOTHING = 0.1
 Z_LOSS_WEIGHT = 1e-4
+UNLIKELIHOOD_WEIGHT = 0.1  # Obligatoire (> 0), point de depart non valide sur Portr-AI.
+UNLIKELIHOOD_NGRAM_SIZE = 4
+UNLIKELIHOOD_WINDOW = 64
 
-# Prepared data and artifacts
+#* Prepared data and artifacts
 PRETRAIN_DATASET_SPLIT = "fr"
 PRETRAIN_TOKENIZER_SAMPLE_BYTES = 300 * 1024 * 1024
 PRETRAIN_TOKEN_BUDGET = 500_000_000
@@ -121,7 +126,7 @@ ENCODE_CORPUS_LIMIT = 0
 MAX_TOKENS_FOR_TRAIN = None
 ENCODING_CACHE_PATH = "artifacts/cache/encoded_tokens.json"
 
-# SFT data and training configuration
+#* SFT data and training configuration
 SFT_DATASET_SPLIT = "train"
 SFT_MAX_EXAMPLES = 30_000   #& Nombre maximum d'exemples SFT à utiliser pour l'entrainement (0 = tous)
 SFT_VAL_RATIO = 0.01
@@ -147,13 +152,14 @@ SFT_WEIGHT_DECAY = 0.01
 SFT_EPOCHS = 2
 SFT_LABEL_SMOOTHING = 0.0
 SFT_Z_LOSS_WEIGHT = 0.0
+SFT_UNLIKELIHOOD_WEIGHT = 0.1  # Obligatoire (> 0), force reglable pour le SFT.
 SFT_LABEL_ALIGNMENT_VERSION = 3
 SFT_RESUME_FROM_CHECKPOINT = True
 SFT_CHECKPOINT_EVERY_STEPS = 100
 SFT_EVAL_INTERVAL = 0
 SFT_EVAL_MAX_BATCHES = 200
 
-# Inference config
+#* Inference config
 INFER_PROMPT = "bonjour je suis un LLM français nommé Portr-AI."
 INFER_MAX_NEW_TOKENS = 512
 INFER_TEMPERATURE = 0.9
@@ -252,20 +258,34 @@ def _base_data_ready():
         PREPARED_CACHE_DIR / "train_tokens.json",
         PREPARED_CACHE_DIR / "val_tokens.json"
     )
-    return not (PREPARED_CACHE_DIR / ".preparation_in_progress").exists() and all(path.exists() for path in required)
+    if (PREPARED_CACHE_DIR / ".preparation_in_progress").exists() or not all(path.exists() for path in required):
+        return False
+    try:
+        tokenizer_model = Tokenizer.load(TOKENIZER_MODEL_PATH)
+        load_token_cache(PREPARED_CACHE_DIR / "train_tokens.json", tokenizer_model)
+        load_token_cache(PREPARED_CACHE_DIR / "val_tokens.json", tokenizer_model, allow_empty=True)
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def _sft_data_ready():
-    """Indique si les deux splits SFT et leurs métadonnées existent."""
+    """Indique si les deux splits SFT et leurs métadonnées existent.
+    
+    Returns:
+        bool: True si les deux splits SFT et leurs métadonnées existent, False sinon.
+    """
     if (PREPARED_CACHE_DIR / ".preparation_in_progress").exists():
         return False
     if not all(path.exists() for path in (SFT_TRAIN_PATH, SFT_VAL_PATH, SFT_META_PATH)):
+        return False
+    if SFT_META_PATH.with_suffix(".pending").exists():
         return False
     try:
         metadata = json.loads(SFT_META_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    if metadata.get("label_alignment_version") != SFT_LABEL_ALIGNMENT_VERSION:
+    if not isinstance(metadata, dict) or metadata.get("label_alignment_version") != SFT_LABEL_ALIGNMENT_VERSION:
         return False
     if metadata.get("seq_length") != SEQ_LENGTH or metadata.get("ignore_index") != LOSS_IGNORE_INDEX:
         return False
@@ -273,7 +293,10 @@ def _sft_data_ready():
     if not isinstance(special_tokens, dict):
         return False
     try:
-        token_to_id = Tokenizer.load(TOKENIZER_MODEL_PATH).get_token_to_id()
+        tokenizer_model = Tokenizer.load(TOKENIZER_MODEL_PATH)
+        token_to_id = tokenizer_model.get_token_to_id()
+        if metadata.get("tokenizer_fingerprint") and metadata["tokenizer_fingerprint"] != tokenizer_model.fingerprint():
+            return False
         return (
             metadata.get("tokenizer_vocab_size") == len(token_to_id)
             and all(token_to_id.get(token) == token_id for token, token_id in special_tokens.items())
@@ -341,8 +364,10 @@ def _prepare_pretraining_data() -> None:
 
 
 def _prepare_sft_data():
-    """Lance la préparation du dataset instruction/réponse SFT."""
+    """Lance la préparation du dataset instruction/réponse SFT.
+    """
     import prepare_sft_data
+    _assert_no_incomplete_preparation()
 
     print("[main] preparation du dataset SFT")
     prepare_sft_data.prepare(argparse.Namespace(
@@ -365,40 +390,63 @@ def _prepare_sft_data():
 
 
 def _build_sft_dataloaders(device: torch.device):
-    """Construit les DataLoaders SFT depuis les fichiers NPZ préparés."""
+    """Construit les DataLoaders SFT depuis les fichiers NPZ préparés.
+
+    Args:
+        device (torch.device): Device cible pour l'entrainement ou l'inference (CPU ou GPU).
+
+    Raises:
+        RuntimeError: Dataset SFT absent ou incomplet
+        RuntimeError: Invalidité du format
+        ValueError: _description_
+
+    Returns:
+        _type_: _description_
+    """
     if not _sft_data_ready():
         raise RuntimeError("Dataset SFT absent. Lancez d'abord l'action de preparation SFT.")
 
     train_dataset = SFTDataset(SFT_TRAIN_PATH)
     val_dataset = SFTDataset(SFT_VAL_PATH)
+    metadata = json.loads(SFT_META_PATH.read_text(encoding="utf-8"))
+
+    for name, path in (("train", SFT_TRAIN_PATH), ("val", SFT_VAL_PATH)):
+        expected = metadata.get(f"{name}_sha256")
+
+        if expected and sha256_file(path) != expected:
+            raise RuntimeError(f"Split SFT {name} incompatible avec ses metadonnees")
+        
     if len(train_dataset) == 0 or len(val_dataset) == 0:
         raise ValueError("Les splits SFT train et val doivent etre non vides.")
+    
     batch_size, _ = _batch_config(device)
     loader_kwargs = {
         "batch_size": batch_size,
         "num_workers": DATALOADER_NUM_WORKERS,
         "pin_memory": device.type == "cuda",
-        "persistent_workers": DATALOADER_NUM_WORKERS > 0,
+        "persistent_workers": DATALOADER_NUM_WORKERS > 0
     }
     sampler = ResumableRandomSampler(len(train_dataset), seed=SEED)
     train_loader = DataLoader(train_dataset, sampler=sampler, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
-    print(
-        f"[main] SFT sequences: train={len(train_dataset)} val={len(val_dataset)} "
-        f"batch_size={batch_size}"
-    )
+
+    print(f"[main] SFT sequences: train={len(train_dataset)} val={len(val_dataset)} batch_size={batch_size}")
+
     return train_loader, val_loader
 
 
 def _train_sft_pipeline(device: torch.device, fresh: bool = False):
     """Charge le modèle de base et lance le fine-tuning SFT."""
     _assert_no_incomplete_preparation()
+    torch.manual_seed(SEED)
     base_path = _base_model_path()
     if not base_path.exists():
         raise RuntimeError(f"Modele pre-entraine absent: {base_path}")
 
     tokenizer_model = Tokenizer.load(TOKENIZER_MODEL_PATH)
     model, _payload = load_model_from_final_state(base_path, tokenizer_model, device=str(device))
+    if SEQ_LENGTH > model.seq_length:
+        raise RuntimeError("Les sequences SFT depassent le contexte du modele de base")
     tokenizer_ids = tokenizer_model.get_token_to_id().values()
     required_vocab_size = max(len(tokenizer_model.get_token_to_id()), max(tokenizer_ids, default=-1) + 1)
     if required_vocab_size > model.vocab_size:
@@ -439,11 +487,22 @@ def _train_sft_pipeline(device: torch.device, fresh: bool = False):
         benchmark_path=str(run_dir / "training_benchmark.csv") if run_dir else "artifacts/benchmarks/sft_training_benchmark.csv",
         label_smoothing=SFT_LABEL_SMOOTHING,
         z_loss_weight=SFT_Z_LOSS_WEIGHT,
+        unlikelihood_weight=SFT_UNLIKELIHOOD_WEIGHT,
+        unlikelihood_ngram_size=UNLIKELIHOOD_NGRAM_SIZE,
+        unlikelihood_window=UNLIKELIHOOD_WINDOW,
+        unlikelihood_exclude_token_ids=tuple(tokenizer_model.get_token_to_id()[token] for token in tokenizer_model.special_tokens if token in tokenizer_model.get_token_to_id()),
         compile_model=False
     )
+    config.tokenizer_fingerprint = tokenizer_model.fingerprint()
+    config.data_identity = {"base_model": file_identity(base_path), "train": file_identity(SFT_TRAIN_PATH),
+                             "val": file_identity(SFT_VAL_PATH), 
+                             "metadata": file_identity(SFT_META_PATH)
+                             }
+    
     if fresh:
         _activate_sft_run(run_dir)
         print(f"[main] nouveau run SFT isole: {run_dir}; reprise=6, inference=8")
+
     history = train_sft_model(model, train_loader, config, val_dataloader=val_loader)
     print(f"[main] SFT checkpoint path: {history['checkpoint_path']}")
     print(f"[main] SFT final model path: {history['final_model_path']}")
@@ -628,14 +687,7 @@ def _get_or_encode_tokens(tokenizer_model):
         torch.Tensor: Tensor int32 de tokens encodés (memory-mapped si issu du cache).
     """
     _assert_no_incomplete_preparation()
-    manifest = PREPARED_CACHE_DIR / "train_tokens.json"
-    with manifest.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
-    bin_path = Path(payload["bin_path"])
-    token_count = int(payload["token_count"])
-    if not bin_path.exists() or bin_path.stat().st_size != token_count * 4:
-        raise RuntimeError(f"Cache train invalide: {manifest}. Relancez le mode 2.")
-    return torch.from_file(str(bin_path), shared=False, size=token_count, dtype=torch.int32)
+    return load_token_cache(PREPARED_CACHE_DIR / "train_tokens.json", tokenizer_model)
 
 
 def _check_dataset_quality(path: str, sample_lines: int = 5000):
@@ -659,19 +711,20 @@ def _check_dataset_quality(path: str, sample_lines: int = 5000):
     malformed_json = 0
     missing_text = 0
     empty_text = 0
+    blank_lines = 0
     short_text = 0
     long_text = 0
     char_counter = Counter()
 
     with dataset_path.open("r", encoding="utf-8") as f:
         for line in f:
-            total += 1
-            if sample_lines and total > sample_lines:
+            if sample_lines and total >= sample_lines:
                 break
+            total += 1
 
             line = line.strip()
             if not line:
-                empty_text += 1
+                blank_lines += 1
                 continue
 
             try:
@@ -681,6 +734,9 @@ def _check_dataset_quality(path: str, sample_lines: int = 5000):
                 continue
 
             parsed += 1
+            if not isinstance(item, dict):
+                missing_text += 1
+                continue
             text = item.get("text")
             if text is None:
                 missing_text += 1
@@ -707,6 +763,7 @@ def _check_dataset_quality(path: str, sample_lines: int = 5000):
     print(f"[data-check] json invalides: {malformed_json}")
     print(f"[data-check] champ text manquant/invalide: {missing_text}")
     print(f"[data-check] textes vides: {empty_text}")
+    print(f"[data-check] lignes blanches: {blank_lines}")
     print(f"[data-check] textes tres courts (<10): {short_text}")
     print(f"[data-check] textes tres longs (>5000): {long_text}")
 
@@ -747,18 +804,22 @@ def _build_dataloaders(tokenizer_model, device: torch.device):
     n_tokens = int(tokens.numel())
     print(f"[main] nb tokens encodes: {n_tokens}")
 
-    if n_tokens <= SEQ_LENGTH + 1:
+    if n_tokens < SEQ_LENGTH + 1:
         raise ValueError(f"Pas assez de tokens pour SEQ_LENGTH={SEQ_LENGTH}. tokens={n_tokens}")
 
     val_manifest = PREPARED_CACHE_DIR / "val_tokens.json"
     val_tokens = None
+
     if val_manifest.exists():
-        with val_manifest.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-        bin_path = Path(payload["bin_path"])
-        token_count = int(payload["token_count"])
-        if bin_path.exists() and bin_path.stat().st_size == token_count * 4:
-            val_tokens = torch.from_file(str(bin_path), shared=False, size=token_count, dtype=torch.int32)
+        val_tokens = load_token_cache(val_manifest, tokenizer_model, allow_empty=True)
+
+        if val_tokens.numel() == 0:
+            val_tokens = None
+        elif val_tokens.numel() < SEQ_LENGTH + 1:
+            raise ValueError("Cache val trop court pour une sequence de validation")
+        
+    else:
+        raise RuntimeError("Manifeste de validation absent: preparer les deux splits")
 
     train_ds = TextDataset(tokens, SEQ_LENGTH, stride=SEQ_STRIDE)
     val_ds = TextDataset(val_tokens, SEQ_LENGTH) if val_tokens is not None else None
@@ -794,19 +855,16 @@ def _train_pipeline(dataloader: DataLoader, val_dataloader: DataLoader | None, t
     Returns:
         tuple[GPT, dict]: Le modèle GPT entraîné et un dictionnaire d'historique contenant les pertes par époque, les chemins des checkpoints et du modèle final, et d'autres métriques pertinentes pour l'analyse post-entraînement.
     """
+    torch.manual_seed(SEED)
     vocab_size = max(tokenizer_model.get_token_to_id().values()) + 1
     checkpoint_path = Path(CHECKPOINT_DIR) / CHECKPOINT_NAME
     if RESUME_FROM_CHECKPOINT and checkpoint_path.exists():
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         saved_vocab = payload["model_state_dict"]["embedding.token_emb.weight"].shape[0]
         del payload
+
         if saved_vocab != vocab_size:
-            raise RuntimeError(
-                f"Reprise de base incompatible: checkpoint vocab={saved_vocab}, "
-                f"tokenizer vocab={vocab_size}. Ne pas redimensionner silencieusement "
-                "un optimizer sauvegarde. Verifier les IDs du tokenizer et choisir "
-                "une migration explicite ou un nouveau run."
-            )
+            raise RuntimeError(f"Reprise de base incompatible: checkpoint vocab={saved_vocab}, tokenizer vocab={vocab_size}. Ne pas redimensionner silencieusement un optimizer sauvegarde. Verifier les IDs du tokenizer et choisir une migration explicite ou un nouveau run.")
     print(f"[main] vocab_size effective: {vocab_size}")
 
     model = GPT(
@@ -849,11 +907,19 @@ def _train_pipeline(dataloader: DataLoader, val_dataloader: DataLoader | None, t
         seed=SEED,
         eval_interval=EVAL_INTERVAL,
         eval_max_batches=EVAL_MAX_BATCHES,
-        compile_model=USE_COMPILE
+        compile_model=USE_COMPILE,
+        unlikelihood_weight=UNLIKELIHOOD_WEIGHT,
+        unlikelihood_ngram_size=UNLIKELIHOOD_NGRAM_SIZE,
+        unlikelihood_window=UNLIKELIHOOD_WINDOW,
+        unlikelihood_exclude_token_ids=tuple(tokenizer_model.get_token_to_id()[token] for token in tokenizer_model.special_tokens if token in tokenizer_model.get_token_to_id())
     )
 
-    loss_fn = partial(autoregressive_cross_entropy, ignore_index=LOSS_IGNORE_INDEX,
-        label_smoothing=LABEL_SMOOTHING, z_loss_weight=Z_LOSS_WEIGHT)
+    loss_fn = partial(autoregressive_cross_entropy, ignore_index=LOSS_IGNORE_INDEX, label_smoothing=LABEL_SMOOTHING,
+                       z_loss_weight=Z_LOSS_WEIGHT)
+    
+    train_cfg.tokenizer_fingerprint = tokenizer_model.fingerprint()
+    train_cfg.data_identity = {split: file_identity(PREPARED_CACHE_DIR / f"{split}_tokens.json") for split in ("train", "val")}
+    train_cfg.data_identity["binaries"] = {split: file_identity(PREPARED_CACHE_DIR / f"{split}_tokens.bin") for split in ("train", "val")}
 
     #& Validation : cross-entropy pure (sans label smoothing ni z-loss)
     #& -> perplexite interpretable
@@ -896,7 +962,7 @@ def _run_inference(model: GPT, tokenizer_model, device: torch.device, use_sft_te
     )
 
     print("[main] inference done")
-    print(f"[main] generated token count: {len(token_ids)}")
+    print(f"[main] total token count (prompt included): {len(token_ids)}")
     print(f"[main] generated text:\n{text}")
 
 
@@ -918,11 +984,7 @@ def _load_model_for_inference_from_artifact(tokenizer_model, final_model_path: s
     model, _payload = load_model_from_final_state(
         final_model_path=model_path,
         tokenizer=tokenizer_model, device=device)
-    tokenizer_ids = tokenizer_model.get_token_to_id().values()
-    required_vocab_size = max(len(tokenizer_model.get_token_to_id()), max(tokenizer_ids, default=-1) + 1)
-    if required_vocab_size > model.vocab_size:
-        model.resize_token_embeddings(required_vocab_size)
-        print(f"[main] embeddings redimensionnes: vocab={required_vocab_size}")
+    
     print(f"[main] final model loaded for inference: {model_path}")
     return model
 
@@ -980,7 +1042,7 @@ def _interactive_reprompt_loop(model: GPT, tokenizer_model, device: torch.device
             print(f"[reprompt] erreur: {exc}")
             continue
 
-        print(f"[reprompt] tokens: {len(token_ids)}")
+        print(f"[reprompt] tokens (prompt inclus): {len(token_ids)}")
         print(f"[reprompt] text:\n{text}\n")
 
 
@@ -1027,18 +1089,19 @@ def main() -> None:
     action = _select_pipeline_mode_console()
     if action is None:
         return
-    if action == "status":
-        _print_project_status()
-        return
-
-    device = _setup_device()
-
     try:
+        if action == "status":
+            _print_project_status()
+            return
+        
+        device = None if action in {"prepare_pretraining", "prepare_sft"} else _setup_device()
         if action == "prepare_pretraining":
             _prepare_pretraining_data()
         elif action == "prepare_sft":
+
             if not Path(TOKENIZER_MODEL_PATH).exists():
                 raise RuntimeError("Tokenizer absent. Preparez d'abord les donnees pre-entrainement.")
+            
             _prepare_sft_data()
         elif action == "train_pretraining":
             _train_pretraining_action(device)
@@ -1053,15 +1116,20 @@ def main() -> None:
         elif action == "inference_sft":
             _inference_action(device, sft=True)
         elif action == "full_pretraining":
-            if not _base_data_ready():
-                _prepare_pretraining_data()
+
             if INFERENCE_ONLY_FROM_FINAL_MODEL:
                 _inference_action(device, sft=False)
             else:
+                if not _base_data_ready():
+                    _prepare_pretraining_data()
+
                 model = _train_pretraining_action(device)
+
                 if model is not None:
                     _inference_action(device, sft=False)
+
         print(f"[main] action terminee: {action}")
+        
     except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
         print(f"[main] action impossible: {exc}")
 

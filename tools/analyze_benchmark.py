@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Claude (LLM)
 
@@ -420,8 +421,8 @@ def analyze(raw: pd.DataFrame, args) -> SimpleNamespace:
         "best_raw": {"step": int(x[best_raw_idx]), "loss": float(loss[best_raw_idx])},
         "best_trend": {"step": int(x[best_trend_idx]), "loss": float(trend[best_trend_idx])},
         "noise_sigma": noise, "windows": windows, "milestones": milestones,
-        "perplexity_final": float(math.exp(min(trend[-1], 50))),
-        "bits_per_token_final": float(trend[-1] / math.log(2)),
+        "perplexity_final": float(math.exp(min(trend[-1], 50))) if getattr(args, "loss_is_ce", False) else None,
+        "bits_per_token_final": float(trend[-1] / math.log(2)) if getattr(args, "loss_is_ce", False) else None,
         "n_spikes_up": int((df["loss_spike"] == 1).sum()), "n_spikes_down": int((df["loss_spike"] == -1).sum()),
     }
     if windows:
@@ -716,7 +717,8 @@ def build_report(A: SimpleNamespace, csv_path: Path) -> list[str]:
             f"- {L['initial']:.3f} → {L['final_trend']:.3f} (tendance finale) ; moyenne des 100 dernières mesures {L['final_raw_mean_last_100']:.3f}.",
             f"- Meilleure valeur brute {L['best_raw']['loss']:.3f} (step {L['best_raw']['step']:,}) ; meilleure tendance "
             f"{L['best_trend']['loss']:.3f} (step {L['best_trend']['step']:,}).",
-            f"- Perplexité ≈ {L['perplexity_final']:.1f}, {L['bits_per_token_final']:.3f} bit/token (si loss = entropie croisée en nats).",
+            (f"- Perplexité ≈ {L['perplexity_final']:.1f}, {L['bits_per_token_final']:.3f} bit/token (loss declaree CE pure)."
+             if L['perplexity_final'] is not None else "- Perplexite train non calculee: la loss regularisee (dont UL) n'est pas une CE pure. Consulter val_loss."),
             f"- Bruit de mesure (σ des résidus) : début {L['noise_sigma']['early']:.3f}, milieu {L['noise_sigma']['mid']:.3f}, fin {L['noise_sigma']['late']:.3f}.",
             f"- Pics : {L['n_spikes_up']} hausses et {L['n_spikes_down']} chutes au-delà de {A.args.z:g} σ robustes."]
     if L["windows"]:
@@ -1266,6 +1268,7 @@ def parse_args(argv=None):
     p.add_argument("--segments", type=int, default=10, help="nombre de segments pour les statistiques par phase")
     p.add_argument("--grad-clip", type=float, default=None, help="seuil de clipping du gradient (optionnel)")
     p.add_argument("--total-steps", type=int, default=None, help="nombre total de steps prévu (pour l'ETA)")
+    p.add_argument("--loss-is-ce", action="store_true", help="Declarer explicitement une loss CE pure pour calculer sa perplexite (pas pour la loss train avec UL)")
     return p.parse_args(argv)
 
 

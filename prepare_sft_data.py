@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -30,6 +31,7 @@ from typing import Any, Callable
 import numpy as np
 from tokenizer.tokenizer import Tokenizer
 from datasets import load_dataset
+from data.artifacts import atomic_json, sha256_file
 
 DATASET_NAME = "angeluriot/french_instruct"
 ROOT_DIR = Path(__file__).resolve().parent
@@ -71,6 +73,8 @@ def extract_pair(record, context_mode):
     #& Validation de la structure de la conversation
     if not isinstance(conversation, list) or len(conversation) != 2:
         return None, "multi_tour"
+    if not all(isinstance(message, dict) for message in conversation):
+        return None, "structure_invalide"
     if conversation[0].get("role") != "user" or conversation[1].get("role") != "assistant":
         return None, "roles_inattendus"
 
@@ -182,6 +186,8 @@ def load_tokenizer(path, update_path = True):
     missing = [token for token in SPECIAL_TOKENS if token not in token_to_id]
 
     if missing:
+        if not update_path:
+            raise ValueError("Tokens SFT manquants avec --no-update-tokenizer: impossible de produire des IDs persistants")
         next_id = max(token_to_id.values(), default=-1) + 1
 
         for token in missing:
@@ -235,6 +241,8 @@ def prepare(args: argparse.Namespace):
             ValueError: Si les paramètres fournis sont invalides, tels que des longueurs négatives ou des ratios hors limites.
             ValueError: Si le dataset ne peut pas être chargé.
             ValueError: Si le tokenizer ne peut pas être chargé ou mis à jour.
+            ValueError: Si aucun exemple SFT valide n'est trouvé après le filtrage.
+            ValueError: Si le nombre d'exemples SFT valides est inférieur à 2, ce qui est nécessaire pour la séparation train/val.
     """
     
 
@@ -242,8 +250,14 @@ def prepare(args: argparse.Namespace):
         raise ValueError("--seq-length doit etre positif")
     if not 0.0 < args.val_ratio < 1.0:
         raise ValueError("--val-ratio doit etre compris entre 0 et 1")
-    if args.max_examples <= 0:
-        raise ValueError("--max-examples doit etre positif")
+    if args.max_examples < 0:
+        raise ValueError("--max-examples doit etre >= 0 (0 = tous)")
+    if args.min_answer_tokens <= 0 or (args.max_answer_tokens is not None and args.max_answer_tokens < args.min_answer_tokens):
+        raise ValueError("Bornes de longueur de reponse invalides")
+    if args.max_prompt_tokens is not None and args.max_prompt_tokens <= 0:
+        raise ValueError("--max-prompt-tokens doit etre positif")
+    if args.identity_jsonl and args.identity_repeat < 0:
+        raise ValueError("--identity-repeat doit etre >= 0")
 
     dataset = load_dataset(DATASET_NAME, split=args.split)
 
@@ -254,6 +268,10 @@ def prepare(args: argparse.Namespace):
             print(f"[{status}] {count:>7}  {source}")
         return None
 
+    metadata_path = args.out_prefix.with_name(f"{args.out_prefix.name}_meta.json")
+    pending_path = metadata_path.with_suffix(".pending")
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    pending_path.write_text("Preparation SFT incomplete.\n", encoding="utf-8")
     tokenizer, special_ids = load_tokenizer(args.tokenizer_path, update_path=not args.no_update_tokenizer)
 
     token_to_id = tokenizer.get_token_to_id()
@@ -283,11 +301,11 @@ def prepare(args: argparse.Namespace):
 
     rng.shuffle(pairs)
     target_val = max(1, round(args.max_examples * args.val_ratio))
-    target_total = args.max_examples + target_val
+    target_total = args.max_examples + target_val if args.max_examples else None
     examples: list[tuple[list[int], list[int]]] = []
 
     for prompt, answer in pairs:
-        if len(examples) >= target_total:
+        if target_total is not None and len(examples) >= target_total:
             break
 
         example, reason = build_example(
@@ -310,6 +328,9 @@ def prepare(args: argparse.Namespace):
     if len(examples) < 2:
         raise ValueError("Il faut au moins deux exemples SFT valides pour train et val.")
     rng.shuffle(examples)
+
+    #& Séparation train/val
+    target_val = min(target_val, max(1, round(len(examples) * args.val_ratio))) if args.max_examples else max(1, round(len(examples) * args.val_ratio))
     val = examples[: min(target_val, len(examples) - 1)]
     train = examples[len(val) :]
 
@@ -351,6 +372,9 @@ def prepare(args: argparse.Namespace):
         "split": args.split,
         "tokenizer_path": str(args.tokenizer_path),
         "tokenizer_vocab_size": len(token_to_id),
+        "tokenizer_fingerprint": tokenizer.fingerprint(),
+        "train_sha256": sha256_file(train_path),
+        "val_sha256": sha256_file(val_path),
         "special_tokens": dict(zip(SPECIAL_TOKENS, special_ids)),
         "seq_length": args.seq_length,
         "ignore_index": IGNORE_INDEX,
@@ -364,7 +388,8 @@ def prepare(args: argparse.Namespace):
 
     metadata_path = out_prefix.with_name(f"{out_prefix.name}_meta.json")
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_json(metadata_path, metadata)
+    pending_path.unlink()
 
     print(f"Train: {train_path} ({len(train)} exemples)")
     print(f"Val:   {val_path} ({len(val)} exemples)")
@@ -390,11 +415,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--identity-repeat", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out-prefix", type=Path, default=DEFAULT_OUT_PREFIX)
-    parser.add_argument(
-        "--no-update-tokenizer",
-        action="store_true",
-        help="N'enregistre pas les tokens speciaux manquants dans le tokenizer"
-    )
+    parser.add_argument("--no-update-tokenizer", action="store_true", help="N'enregistre pas les tokens speciaux manquants dans le tokenizer")
     return parser.parse_args()
 
 

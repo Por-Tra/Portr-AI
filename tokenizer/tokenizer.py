@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import hashlib
 import os
 import re
 from array import array
@@ -363,13 +365,13 @@ class Tokenizer:
     #*                          Sérialisation
     #* ------------------------------------------------------------------
 
-    def save(self, path: str = DEFAULT_MODEL_PATH):
+    def save(self, path = DEFAULT_MODEL_PATH):
         """Sauve le modèle BPE dans un fichier JSON.
 
         Args:
             path (str, optional): Chemin du fichier JSON dans lequel sauvegarder le modèle. Defaults to DEFAULT_MODEL_PATH.
         """
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(os.fspath(path)) or ".", exist_ok=True)
         data = {
             "end_of_word": self.end_of_word,
             "vocab": sorted(self.vocab),
@@ -380,11 +382,15 @@ class Tokenizer:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     @classmethod
-    def load(cls, path: str = DEFAULT_MODEL_PATH):
+    def load(cls, path = DEFAULT_MODEL_PATH):
         """ Charge un modèle BPE depuis un fichier JSON.
 
         Args:
             path (str, optional): Chemin du fichier JSON à partir duquel charger le modèle. Defaults to DEFAULT_MODEL_PATH.
+
+        Raises:
+            ValueError: Si le fichier JSON est mal formé ou ne contient pas les clés attendues.
+            ValueError: Si le tokenizer chargé ne contient pas de token <UNK> ou a des IDs dupliqués/négatifs.
 
         Returns:
             Tokenizer: Instance du tokenizer BPE chargé depuis le fichier JSON.
@@ -405,7 +411,27 @@ class Tokenizer:
             tok.token_to_id = {t: i for i, t in enumerate(sorted(tok.vocab))}
 
         tok.id_to_token = {i: t for t, i in tok.token_to_id.items()}
+        if len(tok.id_to_token) != len(tok.token_to_id) or any(i < 0 for i in tok.id_to_token):
+            raise ValueError("IDs du tokenizer dupliques ou negatifs")
+        if "<UNK>" not in tok.token_to_id:
+            raise ValueError("Tokenizer sans token <UNK>")
+        
+        tok.vocab = set(tok.token_to_id)    #& Reconstruction du vocab
         return tok
+
+    def fingerprint(self, vocab_size = None):
+        """ Calcule un hash SHA256 du tokenizer, incluant le vocabulaire et les merges.
+
+        Args:
+            vocab_size (int, optional): Taille du vocabulaire à inclure dans le hash. Defaults to None.
+
+        Returns:
+            str: Hash SHA256 du tokenizer.
+        """
+        mapping = {t: i for t, i in self.token_to_id.items() if vocab_size is None or i < vocab_size}
+        payload = {"normalization": "legacy_underscore_v1", "space_token": SPACE_TOKEN,
+                   "end_of_word": self.end_of_word, "merges": self.merges, "token_to_id": mapping}
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
     #* ------------------------------------------------------------------
     #*                          Encoding

@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -19,15 +20,17 @@ description du script:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import csv
 from pathlib import Path
 import math
 import os
 import threading
 import time
+from functools import partial
 
 import torch
+from training.loss import training_loss_with_unlikelihood, validate_unlikelihood_parameters
 
 
 @dataclass
@@ -69,6 +72,36 @@ class TrainConfig:
 
     #* torch.compile (nécessite Triton : Linux, ou triton-windows sous Windows)
     compile_model: bool = False
+    unlikelihood_weight = 0.1   #& Poids de la loss unlikelihood (0 = désactivée)
+    unlikelihood_ngram_size= 4  #& Taille des n-grammes à pénaliser
+    unlikelihood_window: int = 64   #& Fenêtre de contexte pour la détection des répétitions
+    unlikelihood_exclude_token_ids: tuple[int, ...] = ()    #& IDs de tokens à exclure de 
+                                                            #& la pénalisation (ex: padding, prompt, etc.)
+    tokenizer_fingerprint = None
+    data_identity: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        _unlikelihood_settings(self)
+        if self.epochs <= 0 or self.grad_accum_steps <= 0 or self.log_interval <= 0:
+            raise ValueError("epochs, grad_accum_steps et log_interval doivent etre positifs")
+        if self.eval_max_batches is not None and self.eval_max_batches <= 0:
+            raise ValueError("eval_max_batches doit etre positif ou None")
+        if self.warmup_steps < 0 or (self.warmup_ratio is not None and not 0 <= self.warmup_ratio <= 1):
+            raise ValueError("Warmup invalide")
+        if not 0 <= self.lr_decay_factor <= 1:
+            raise ValueError("lr_decay_factor doit etre compris entre 0 et 1")
+
+
+def _unlikelihood_settings(config):
+    """Versioned objective metadata for new checkpoints and final artifacts."""
+    weight = config.unlikelihood_weight
+    validate_unlikelihood_parameters(weight, config.unlikelihood_ngram_size, config.unlikelihood_window)
+    return {
+        "version": 1, "weight": float(weight),
+        "ngram_size": config.unlikelihood_ngram_size,
+        "window": config.unlikelihood_window,
+        "exclude_token_ids": sorted(set(config.unlikelihood_exclude_token_ids)),
+    }
 
 
 #* ---------------------------------------------------------------------------
@@ -99,10 +132,20 @@ def _resolve_amp_dtype(device: torch.device, requested: str):
         device (torch.device): Le device cible pour l'entraînement.
         requested (str): Le type de données demandé.
 
+    Raises:
+        ValueError: Si le type de données demandé n'est pas "auto", "bf16" ou "fp16".
+        RuntimeError: Si bf16 est demandé mais non supporté par le GPU.
+
     Returns:
         torch.dtype: Le type de données résolu.
     """
+    if requested not in {"auto", "bf16", "fp16"}:
+        raise ValueError("amp_dtype doit etre auto, bf16 ou fp16")
     if requested == "bf16":
+
+        if device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("bf16 demande mais non supporte par le GPU")
+        
         return torch.bfloat16
     if requested == "fp16":
         return torch.float16
@@ -136,7 +179,42 @@ def _cosine_lr_with_warmup(step: int, warmup_steps: int, total_steps: int, min_l
 #*                              Checkpoints
 #* ---------------------------------------------------------------------------
 
-_pending_save: threading.Thread | None = None
+_pending_save = None   #& threading.Thread
+_pending_save_error = None    #& Exception
+
+
+def _rng_state():
+    return {"cpu": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []}
+
+
+def _restore_rng_state(state):
+    """ Restaure l'état aléatoire de PyTorch (CPU et GPU) à partir d'un dictionnaire.
+
+    Args:
+        state (dict): Dictionnaire contenant l'état aléatoire à restaurer.
+
+    Raises:
+        RuntimeError: Si le nombre de GPU est incompatible avec l'état aléatoire sauvegardé.
+    """
+    torch.set_rng_state(state["cpu"])
+    if state.get("cuda") and torch.cuda.is_available():
+
+        if len(state["cuda"]) != torch.cuda.device_count():
+            raise RuntimeError("Nombre de GPU incompatible avec l'etat aleatoire sauvegarde.")
+        
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _architecture_contract(model):
+    return {
+        "vocab_size": getattr(model, "vocab_size", None),
+        "seq_length": getattr(model, "seq_length", None),
+        "embedding_dim": getattr(model, "embedding_dim", None),
+        "num_blocks": getattr(model, "num_blocks", None),
+        "num_heads": model.blocks[0].attention.num_heads if hasattr(model, "blocks") and len(model.blocks) else None,
+        "dropout": model.embedding.dropout.p if hasattr(model, "embedding") else None
+    }
 
 
 def _to_cpu_snapshot(obj):
@@ -157,7 +235,7 @@ def _to_cpu_snapshot(obj):
     return obj
 
 
-def _atomic_save(payload: dict, path: Path):
+def _atomic_save(payload, path):
     """ Sauvegarde atomique d'un checkpoint : écrit dans un fichier temporaire puis renomme.
 
     Args:
@@ -171,11 +249,18 @@ def _atomic_save(payload: dict, path: Path):
 
 
 def wait_for_pending_checkpoint():
-    """Attend la fin de l'écriture asynchrone en cours (si existante)."""
-    global _pending_save
+    """Attend la fin de l'écriture asynchrone en cours (si existante).
+
+    Raises:
+        RuntimeError: Si l'écriture asynchrone a échoué.
+    """
+    global _pending_save, _pending_save_error
     if _pending_save is not None:
         _pending_save.join()
         _pending_save = None
+    if _pending_save_error is not None:
+        error, _pending_save_error = _pending_save_error, None
+        raise RuntimeError("Echec de sauvegarde du checkpoint asynchrone.") from error
 
 
 def _async_save(payload: dict, path: Path):
@@ -189,10 +274,11 @@ def _async_save(payload: dict, path: Path):
     wait_for_pending_checkpoint()
 
     def _write():
+        global _pending_save_error
         try:
             _atomic_save(payload, path)
         except Exception as exc:
-            print(f"[train] WARNING: checkpoint save failed: {exc}")
+            _pending_save_error = exc
 
     _pending_save = threading.Thread(target=_write, daemon=False)
     _pending_save.start()
@@ -201,7 +287,8 @@ def _async_save(payload: dict, path: Path):
 def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler, epoch: int, batch_in_epoch: int,step: int,
     avg_loss: float, checkpoint_path: Path, total_steps: int,
       epoch_losses: list[float] | None = None, val_losses: list[float] | None = None,
-        scaler: torch.amp.GradScaler | None = None, async_write: bool = True):
+        scaler: torch.amp.GradScaler | None = None, async_write: bool = True,
+        unlikelihood_settings: dict | None = None, run_contract: dict | None = None):
     """ Sauvegarde un checkpoint d'entraînement (état du modèle, optimizer, scheduler, etc.) dans un fichier.
 
     Args:
@@ -231,8 +318,13 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
         "epoch_losses": list(epoch_losses or []),
         "val_losses": list(val_losses or [])
     }
+    payload["rng_state"] = _rng_state()
+    if run_contract is not None:
+        payload["run_contract"] = run_contract
     if scaler is not None:
         payload["scaler_state_dict"] = scaler.state_dict()
+    if unlikelihood_settings is not None:
+        payload["unlikelihood_settings"] = unlikelihood_settings
 
     payload = _to_cpu_snapshot(payload)
 
@@ -245,7 +337,8 @@ def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
 
 def load_checkpoint_if_available(model, optimizer, scheduler, 
                                  checkpoint_path, resume, 
-                                 scaler = None, target_epochs = None):
+                                 scaler = None, target_epochs = None, expected_unlikelihood = None,
+                                 expected_run_contract = None):
     """ Charge un checkpoint d'entraînement si disponible et compatible avec le modèle actuel.
 
     Args:
@@ -266,8 +359,18 @@ def load_checkpoint_if_available(model, optimizer, scheduler,
         return 0, 0, 0, [], []
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    if target_epochs is not None and int(payload.get("epoch", 0)) >= target_epochs:
+    if expected_unlikelihood is not None:
+        saved = payload.get("unlikelihood_settings")
+        validate_unlikelihood_parameters(expected_unlikelihood["weight"], expected_unlikelihood["ngram_size"], expected_unlikelihood["window"])
+        if saved != expected_unlikelihood:
+            raise RuntimeError("Objectif unlikelihood incompatible avec le checkpoint. Demarrer un nouveau run pour changer ses reglages.")
+    effective_epoch = int(payload.get("epoch", 0))
+    if expected_run_contract and int(payload.get("batch_in_epoch", 0)) >= expected_run_contract["steps_per_epoch"]:
+        effective_epoch += 1
+    if target_epochs is not None and effective_epoch >= target_epochs:
         raise RuntimeError(f"Entrainement deja termine: checkpoint epoch={payload.get('epoch')} \n pour target_epochs={target_epochs}. Utiliser un nouveau run pour \n repartir du modele de base (option 10 pour SFT), ou definir \n explicitement une nouvelle cible et son schedule pour continuer.")
+    if expected_run_contract is not None and payload.get("run_contract") != expected_run_contract:
+        raise RuntimeError("Contrat de reprise incompatible ou absent (donnees, batch, accumulation ou schedule modifies). Demarrer un nouveau run.")
     try:
         model.load_state_dict(payload["model_state_dict"])
     except RuntimeError as exc:
@@ -287,6 +390,9 @@ def load_checkpoint_if_available(model, optimizer, scheduler,
     epoch_losses = [float(v) for v in payload.get("epoch_losses", [])]
     val_losses = [float(v) for v in payload.get("val_losses", [])]
 
+    if "rng_state" in payload:  #& restaurer l'état aléatoire pour une reprise exacte
+        _restore_rng_state(payload["rng_state"])
+
     print(f"[train] resume checkpoint: epoch={start_epoch} batch={batch_in_epoch} step={global_step} path={checkpoint_path}")
     return start_epoch, batch_in_epoch, global_step, epoch_losses, val_losses
 
@@ -302,6 +408,7 @@ def save_final_model_state(model: torch.nn.Module, final_model_path: Path, devic
     """
     payload = {
         "model_state_dict": model.state_dict(),
+        "tokenizer_fingerprint": config.tokenizer_fingerprint,
         "saved_device": str(device),
         "model_hparams": {
             "vocab_size":    int(getattr(model, "vocab_size", 0)),
@@ -312,15 +419,16 @@ def save_final_model_state(model: torch.nn.Module, final_model_path: Path, devic
             ) if hasattr(model, "blocks") and len(model.blocks) > 0 else 0,
             "dropout": float(
                 getattr(getattr(model.embedding, "dropout", None), "p", 0.0)
-            ) if hasattr(model, "embedding") else 0.0,
+            ) if hasattr(model, "embedding") else 0.0
         },
         "config": {
+            "unlikelihood_settings": _unlikelihood_settings(config),
             "epochs":          int(config.epochs),
             "grad_clip":       float(config.grad_clip),
             "warmup_steps":    int(config.warmup_steps),
             "lr_decay_factor": float(config.lr_decay_factor),
             "use_amp":         bool(config.use_amp),
-            "grad_accum_steps": int(config.grad_accum_steps),
+            "grad_accum_steps": int(config.grad_accum_steps)
         },
     }
     _atomic_save(_to_cpu_snapshot(payload), final_model_path)
@@ -363,6 +471,8 @@ def _resolve_steps_per_epoch(dataloader, max_steps_per_epoch: int | None):
     """
     if max_steps_per_epoch is None:
         return len(dataloader)
+    if max_steps_per_epoch <= 0:
+        raise ValueError("max_steps_per_epoch doit etre positif")
     return min(len(dataloader), max_steps_per_epoch)
 
 
@@ -412,8 +522,16 @@ def _run_forward_loss(model: torch.nn.Module, loss_fn, x: torch.Tensor, y: torch
         return loss_fn(logits, y) / accum_divisor
 
 
+def _validate_token_batch(model, x, y):
+    if x.ndim != 2 or y.shape != x.shape or x.dtype not in (torch.int32, torch.int64) or y.dtype != torch.int64:
+        raise ValueError("Batch attendu: input_ids entiers [B,T], labels int64 de meme forme")
+    vocab = getattr(model, "vocab_size", None)
+    if vocab is not None and ((x < 0).any() or (x >= vocab).any() or ((y != -100) & ((y < 0) | (y >= vocab))).any()):
+        raise ValueError("IDs du batch hors vocabulaire: verifier caches et tokenizer")
+
+
 def _optimizer_step(model: torch.nn.Module, optimizer: torch.optim.Optimizer, scheduler,
-                     scaler: torch.amp.GradScaler, grad_clip: float):
+                     scaler: torch.amp.GradScaler, grad_clip: float, grad_normalizer: float = 1.0):
     """ Effectue un step de l'optimizer avec support pour l'AMP (Automatic Mixed Precision)
       et le clipping des gradients.
 
@@ -425,19 +543,24 @@ def _optimizer_step(model: torch.nn.Module, optimizer: torch.optim.Optimizer, sc
         grad_clip (float): Valeur maximale pour le clipping des gradients. Si <= 0, aucun clipping n'est appliqué.
 
     Returns:
-        torch.Tensor | None: La norme des gradients après le clipping,
-          ou None si aucun clipping n'a été appliqué.
+        tuple[torch.Tensor, bool]: Norme des gradients et indicateur de mise à jour effective.
     """
-    grad_norm = None
-    if grad_clip > 0:
-        scaler.unscale_(optimizer)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
+    scaler.unscale_(optimizer)
+    for param in model.parameters():
+        if param.grad is not None:
+            param.grad.mul_(grad_normalizer)
+    grad_norm = torch.nn.utils.clip_grad_norm_(
+        model.parameters(), grad_clip if grad_clip > 0 else float("inf"),
+        error_if_nonfinite=not scaler.is_enabled()
+    )
+    previous_scale = scaler.get_scale()
     scaler.step(optimizer)
     scaler.update()
-    scheduler.step()
+    did_update = scaler.get_scale() >= previous_scale
+    if did_update:
+        scheduler.step()
     optimizer.zero_grad(set_to_none=True)
-    return grad_norm
+    return grad_norm, did_update
 
 
 @torch.no_grad()
@@ -454,26 +577,40 @@ def evaluate(model: torch.nn.Module, dataloader, loss_fn, device: torch.device, 
         amp_dtype (torch.dtype): Type de données à utiliser pour l'AMP.
         max_batches (int | None, optional): Nombre maximum de batches à évaluer. Defaults to None.
 
+    Raises:
+        ValueError: Si max_batches est défini et inférieur ou égal à 0.
+        ValueError: Si aucun token supervisé n'est trouvé dans l'ensemble de validation.
+
     Returns:
         float: La loss moyenne sur l'ensemble de validation.
     """
     was_training = model.training
+    rng_before_eval = _rng_state()
     model.eval()
     total = torch.zeros((), device=device)
     count = 0
-    for batch_idx, (x, y) in enumerate(dataloader):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-        x = x.to(device, non_blocking=True)
-        y = y.to(device, non_blocking=True)
-        supervised = int((y != -100).sum().item())
-        if supervised == 0:
-            continue
-        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
-            total += loss_fn(model(x), y).float() * supervised
-        count += supervised
-    if was_training:
-        model.train()
+    if max_batches is not None and max_batches <= 0:
+        model.train(was_training)
+        raise ValueError("max_batches doit etre positif ou None")
+    try:
+        for batch_idx, (x, y) in enumerate(dataloader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+            supervised = int((y != -100).sum().item())
+            if supervised == 0:
+                continue
+            _validate_token_batch(model, x, y)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+                batch_loss = loss_fn(model(x), y).float()
+                if not torch.isfinite(batch_loss):
+                    raise ValueError("Loss de validation non finie")
+                total += batch_loss * supervised
+            count += supervised
+    finally:
+        model.train(was_training)
+        _restore_rng_state(rng_before_eval)
     if count == 0:
         raise ValueError("Validation sans token supervise.")
     return float(total.item()) / count
@@ -534,15 +671,17 @@ def training_benchmark(epoch, batch,step, loss, LR, grad_norm, elapsed_seconds=N
         "learning_rate",
         "grad_norm",
         "elapsed_seconds",
-        "tokens_per_second",
+        "tokens_per_second"
     ]
 
     should_migrate = False
     migrated_rows = []
     if benchmark_path.exists() and benchmark_path.stat().st_size > 0:
         with benchmark_path.open("r", newline="", encoding="utf-8") as source:
+
             reader = csv.DictReader(source)
             old_fieldnames = reader.fieldnames or []
+
             if set(fieldnames) - set(old_fieldnames):
                 for row in reader:
                     row.setdefault("event", "train")
@@ -564,6 +703,7 @@ def training_benchmark(epoch, batch,step, loss, LR, grad_norm, elapsed_seconds=N
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         if needs_header:
             writer.writeheader()
+
         writer.writerow({
             "timestamp": time.time(),
             "epoch": int(epoch),
@@ -575,7 +715,7 @@ def training_benchmark(epoch, batch,step, loss, LR, grad_norm, elapsed_seconds=N
             "learning_rate": float(LR),
             "grad_norm": float(grad_norm),
             "elapsed_seconds": "" if elapsed_seconds is None else float(elapsed_seconds),
-            "tokens_per_second": "" if tokens_per_second is None else float(tokens_per_second),
+            "tokens_per_second": "" if tokens_per_second is None else float(tokens_per_second)
         })
 
 #* ---------------------------------------------------------------------------
@@ -598,6 +738,8 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     Returns:
         dict: Historique de l'entraînement contenant les losses par epoch, les losses de validation, et les chemins des checkpoints et du modèle final.
     """
+    config.__post_init__()
+    ul_settings = _unlikelihood_settings(config)
     device = resolve_device(config.device)
     _apply_cpu_thread_limits(config)
 
@@ -608,18 +750,44 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     #& (le state_dict d'un module compilé a des clés préfixées "_orig_mod.").
     forward_model = torch.compile(model) if config.compile_model else model
     eval_loss_fn = eval_loss_fn or loss_fn
+    loss_fn = partial(
+        training_loss_with_unlikelihood, base_loss_fn=loss_fn,
+        weight=config.unlikelihood_weight, ngram_size=config.unlikelihood_ngram_size,
+        window=config.unlikelihood_window,
+        exclude_token_ids=config.unlikelihood_exclude_token_ids
+    )
+    print(f"[train] unlikelihood obligatoire: weight={config.unlikelihood_weight} ngram={config.unlikelihood_ngram_size} window={config.unlikelihood_window}; validation sans UL")
 
     accum = max(1, int(config.grad_accum_steps))
     steps_per_epoch = _resolve_steps_per_epoch(dataloader, config.max_steps_per_epoch)
+    if steps_per_epoch <= 0: raise ValueError("Dataloader d'entrainement vide")
     #& Le scheduler avance une fois par optimizer step, pas par micro-batch
     optim_steps_per_epoch = math.ceil(steps_per_epoch / accum)
     total_steps = optim_steps_per_epoch * config.epochs
 
     warmup_steps = (int(total_steps * config.warmup_ratio) if config.warmup_ratio is not None else int(config.warmup_steps))
     config.warmup_steps = warmup_steps
+    run_contract = {
+        "version": 1, "normalization": "supervised_tokens", "epochs": config.epochs,
+        "batch_size": getattr(dataloader, "batch_size", None), "grad_accum_steps": accum,
+        "steps_per_epoch": steps_per_epoch, "total_steps": total_steps,
+        "warmup_steps": warmup_steps, "lr_decay_factor": config.lr_decay_factor,
+        "seed": config.seed, "data_identity": config.data_identity,
+        "tokenizer_fingerprint": config.tokenizer_fingerprint,
+        "architecture": _architecture_contract(model),
+        "dataset_length": len(dataloader.dataset) if hasattr(dataloader, "dataset") else None,
+        "sampler": {"class": type(getattr(dataloader, "sampler", None)).__name__,
+                    "seed": getattr(getattr(dataloader, "sampler", None), "seed", None),
+                    "replacement": getattr(getattr(dataloader, "sampler", None), "replacement", None)},
+        "optimizer": {"class": type(optimizer).__module__ + "." + type(optimizer).__name__,
+                      "groups": [{key: group.get("initial_lr", group["lr"]) if key == "lr" else group[key]
+                                  for key in ("lr", "weight_decay", "betas", "eps") if key in group}
+                                 for group in optimizer.param_groups]}
+    }
 
     use_amp = config.use_amp and device.type == "cuda"
     amp_dtype = _resolve_amp_dtype(device, config.amp_dtype)
+    run_contract["precision"] = {"use_amp": use_amp, "dtype": str(amp_dtype) if use_amp else "float32"}
     #& GradScaler uniquement utile en fp16 (bf16 a la même plage que fp32)
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp and amp_dtype == torch.float16)
 
@@ -643,6 +811,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     scheduler = _build_scheduler(optimizer, warmup_steps, total_steps, config.lr_decay_factor)
 
     # * Reprise depuis checkpoint *
+    torch.manual_seed(config.seed)
     start_epoch, resume_batch, global_step, restored_losses, restored_val = load_checkpoint_if_available(
         model=model,
         optimizer=optimizer,
@@ -650,7 +819,9 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         checkpoint_path=ckpt_path,
         resume=config.resume_from_checkpoint,
         scaler=scaler,
-        target_epochs=config.epochs
+        target_epochs=config.epochs,
+        expected_unlikelihood=ul_settings,
+        expected_run_contract=run_contract
     )
     history["epoch_losses"].extend(restored_losses)
     history["val_losses"].extend(restored_val)
@@ -689,17 +860,25 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             print(f"[train] reprise epoch {epoch + 1} au micro-batch {skip}")
 
         running_loss = 0.0
+        running_tokens = 0
         steps = 0
         grad_norm = None
         #& Accumulateur GPU pour le log (évite .item() à chaque step)
         log_loss_accum = torch.zeros((), device=device)
         log_steps = 0
+        log_tokens = 0
+        log_input_tokens = 0
+        group_tokens = 0
+        group_reference = 1
         start_t = time.time()
         last_log_t = start_t
 
         optimizer.zero_grad(set_to_none=True)
 
+        # DataLoader's base_seed must not consume the restored dropout RNG.
+        iterator_rng = torch.get_rng_state()
         data_iter = iter(dataloader)
+        torch.set_rng_state(iterator_rng)
         if skip and not sampler_skips:
             #& Fallback : sampler non reproductible -> on consomme les batches
             for _ in range(skip):
@@ -709,6 +888,10 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             if batch_idx >= steps_per_epoch:
                 break
 
+            supervised_tokens = int((y != -100).sum().item())
+            if supervised_tokens == 0:
+                raise ValueError("Batch d'entrainement sans token supervise")
+            _validate_token_batch(model, x, y)
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
@@ -717,6 +900,10 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             group_start = (batch_idx // accum) * accum
             group_size = min(accum, steps_per_epoch - group_start)
             is_last_accum = (batch_idx + 1 - group_start) == group_size
+            if batch_idx == group_start:
+                group_tokens = 0
+                group_reference = max(group_size * x.numel(), 1)
+            group_tokens += supervised_tokens
 
             # * Forward + backward *
             loss = _run_forward_loss(
@@ -724,30 +911,33 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
                 loss_fn=loss_fn,
                 x=x,
                 y=y,
-                accum_divisor=group_size,
+                accum_divisor=1,
                 device=device,
                 use_amp=use_amp,
                 amp_dtype=amp_dtype
             )
-            scaler.scale(loss).backward()
+            scaler.scale(loss * (supervised_tokens / group_reference)).backward()
 
             #& Pas de .item() ici : accumulation sur GPU, sync uniquement au log
-            log_loss_accum += loss.detach() * group_size
+            log_loss_accum += loss.detach() * supervised_tokens
             log_steps += 1
+            log_tokens += supervised_tokens
+            log_input_tokens += x.numel()
             steps += 1
 
             # * Optimizer step (tous les grad_accum_steps batches) *
             if is_last_accum:
-                grad_norm = _optimizer_step(
+                grad_norm, did_update = _optimizer_step(
                     model=model,
                     optimizer=optimizer,
                     scheduler=scheduler,
                     scaler=scaler,
-                    grad_clip=config.grad_clip
+                    grad_clip=config.grad_clip,
+                    grad_normalizer=group_reference / group_tokens
                 )
-                global_step += 1
+                global_step += int(did_update)
 
-                if config.checkpoint_every_steps > 0 and global_step % config.checkpoint_every_steps == 0:
+                if did_update and config.checkpoint_every_steps > 0 and global_step % config.checkpoint_every_steps == 0:
                     save_checkpoint(
                         model=model,
                         optimizer=optimizer,
@@ -755,24 +945,27 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
                         epoch=epoch,
                         batch_in_epoch=batch_idx + 1,
                         step=global_step,
-                        avg_loss=running_loss / max(steps - log_steps, 1),
+                        avg_loss=(running_loss + float(log_loss_accum.item())) / max(running_tokens + log_tokens, 1),
                         checkpoint_path=ckpt_path,
                         total_steps=total_steps,
                         epoch_losses=history["epoch_losses"],
                         val_losses=history["val_losses"],
                         scaler=scaler,
-                        async_write=True
+                        async_write=True,
+                        unlikelihood_settings=ul_settings,
+                        run_contract=run_contract
                     )
-                    print(f"[train] periodic checkpoint saved (step={global_step}): {ckpt_path}")
+                    print(f"[train] periodic checkpoint queued (step={global_step}): {ckpt_path}")
 
-                if config.eval_interval > 0 and global_step % config.eval_interval == 0:
+                if did_update and config.eval_interval > 0 and global_step % config.eval_interval == 0:
                     _run_eval("periodic")
 
             # * Log (sync GPU une seule fois par log_interval) *
             if (batch_idx + 1) % config.log_interval == 0:
                 log_sum = float(log_loss_accum.item())
                 running_loss += log_sum
-                avg_log_loss = log_sum / max(log_steps, 1)
+                running_tokens += log_tokens
+                avg_log_loss = log_sum / max(log_tokens, 1)
                 logged_steps = log_steps
                 log_elapsed = max(time.time() - last_log_t, 1e-9)
                 last_log_t = time.time()
@@ -781,7 +974,9 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
 
                 current_lr = scheduler.get_last_lr()[0]
                 gn = float(grad_norm.item()) if grad_norm is not None else 0.0
-                tokens_per_second = logged_steps * x.numel() / log_elapsed
+                tokens_per_second = log_input_tokens / log_elapsed
+                log_tokens = 0
+                log_input_tokens = 0
                 last_train_loss = avg_log_loss
                 last_learning_rate = current_lr
                 last_grad_norm = gn
@@ -808,8 +1003,9 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         #& Flush des losses non encore comptabilisées (dernier bloc partiel)
         if log_steps > 0:
             running_loss += float(log_loss_accum.item())
+            running_tokens += log_tokens
 
-        avg_loss = running_loss / max(steps, 1)
+        avg_loss = running_loss / max(running_tokens, 1)
         elapsed = time.time() - start_t
         history["epoch_losses"].append(avg_loss)
 
@@ -830,9 +1026,11 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             epoch_losses=history["epoch_losses"],
             val_losses=history["val_losses"],
             scaler=scaler,
-            async_write=True
+            async_write=True,
+            unlikelihood_settings=ul_settings,
+            run_contract=run_contract
         )
-        print(f"[train] checkpoint saved: {ckpt_path}")
+        print(f"[train] checkpoint queued: {ckpt_path}")
 
     wait_for_pending_checkpoint()
 

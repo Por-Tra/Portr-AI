@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -38,6 +39,7 @@ from datasets import get_dataset_split_names, load_dataset
 from tqdm import tqdm
 
 from tokenizer.tokenizer import Tokenizer
+from data.artifacts import atomic_json
 
 
 DATASET_NAME = "OpenLLM-France/Luciole-Training-Dataset"
@@ -214,18 +216,14 @@ def write_jsonl_and_count(split, seed, output_dir, cache_dir, token_budget, toke
     # Publish manifests only after the entire stream and file closing succeeded.
     # On error the pending marker remains, even if older manifests still exist.
     for split_name in ("train", "val"):
-        (cache_dir / f"{split_name}_tokens.json").write_text(
-            json.dumps(
-                {
+        atomic_json(cache_dir / f"{split_name}_tokens.json", {
                     "split": split_name,
                     "token_count": counts[split_name],
                     "dtype": "int32",
-                    "bin_path": str(cache_dir / f"{split_name}_tokens.bin"),
-                },
-                indent=2,
-            ),
-            encoding="utf-8"
-        )
+                    "bin_path": str((cache_dir / f"{split_name}_tokens.bin").resolve()),
+                    "tokenizer_fingerprint": tokenizer.fingerprint(),
+                    "tokenizer_vocab_size": max(tokenizer.get_token_to_id().values()) + 1
+                })
     pending_path.unlink()
     return documents, counts["train"], counts["val"]
 
@@ -239,11 +237,20 @@ def encode_jsonl(path, cache_dir, tokenizer, split):
         tokenizer (Tokenizer): Instance de génération de tokens
         split (str): nom du split (ex: "train" ou "val")
 
+    Raises:
+        RuntimeError: Si une préparation précédente est incomplète (fichier .preparation_in_progress présent)
+
     Returns:
         int: nombre total de tokens encodés et écrits dans le fichier binaire
     """
 
     cache_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = cache_dir / PREPARATION_PENDING_NAME
+
+    if pending_path.exists():
+        raise RuntimeError("Preparation precedente incomplete: relancer la preparation complete")
+    
+    pending_path.write_text("Encodage incomplet.\n", encoding="utf-8")
     bin_path = cache_dir / f"{split}_tokens.bin"
     manifest_path = cache_dir / f"{split}_tokens.json"
     token_count = 0
@@ -265,13 +272,10 @@ def encode_jsonl(path, cache_dir, tokenizer, split):
             buffer.tofile(output)
             token_count += len(buffer)
 
-    manifest_path.write_text(
-        json.dumps(
-            {"split": split, "token_count": token_count, "dtype": "int32", "bin_path": str(bin_path)},
-            indent=2,
-        ),
-        encoding="utf-8"
-    )
+    atomic_json(manifest_path, {"split": split, "token_count": token_count, "dtype": "int32", "bin_path": str(bin_path.resolve()),
+                               "tokenizer_fingerprint": tokenizer.fingerprint(),
+                               "tokenizer_vocab_size": max(tokenizer.get_token_to_id().values()) + 1})
+    pending_path.unlink()
     return token_count
 
 
@@ -312,6 +316,8 @@ def prepare_dataset(split=DEFAULT_SPLIT, token_budget=DEFAULT_TOKEN_BUDGET,
     """
     if not 0 <= val_percent < 100:
         raise ValueError("--val-percent doit etre compris entre 0 et 99")
+    if token_budget <= 0 or tokenizer_sample_bytes <= 0 or vocab_size < len(Tokenizer().special_tokens):
+        raise ValueError("Budgets et taille de vocabulaire invalides")
 
     print(f"[prepare:1/6] verification des splits: {DATASET_NAME} / {DATASET_CONFIG}")
     available_splits = get_dataset_split_names(DATASET_NAME, DATASET_CONFIG)
@@ -326,6 +332,9 @@ def prepare_dataset(split=DEFAULT_SPLIT, token_budget=DEFAULT_TOKEN_BUDGET,
     sample_path = output_dir / "tokenizer_sample.jsonl"
     print(f"[prepare:2/6] echantillonnage du split '{split}' ({tokenizer_sample_bytes / 1024**2:.0f} MiB maximum)")
     sample_bytes = write_tokenizer_sample(split, seed, sample_path, tokenizer_sample_bytes, val_percent)
+
+    if sample_bytes == 0: raise ValueError("Echantillon tokenizer vide: aucune donnee exploitable")
+    
     print(f"[prepare:3/6] echantillon termine: {sample_bytes / 1024**2:.1f} MiB dans {sample_path}")
     tokenizer = Tokenizer()
     print(f"[prepare:4/6] entrainement BPE (vocabulaire cible: {vocab_size})")
@@ -341,17 +350,13 @@ def prepare_dataset(split=DEFAULT_SPLIT, token_budget=DEFAULT_TOKEN_BUDGET,
     print(f"[prepare:5/6] tokenizer sauvegarde: {tokenizer_path}")
 
     print(f"[prepare:6/6] collecte + encodage jusqu'a {token_budget:,} tokens")
-    documents, train_budget, val_budget = write_jsonl_and_count(
-        split, seed, output_dir, cache_dir, token_budget, tokenizer, val_percent
-    )
+    documents, train_budget, val_budget = write_jsonl_and_count(split, seed, output_dir, 
+                                                                cache_dir, token_budget, tokenizer, val_percent)
 
     train_tokens = train_budget
     val_tokens = val_budget
 
-    print(f"Prepared {documents} documents ({sample_bytes / 1024**2:.1f} MiB tokenizer sample); "
-        f"train={train_tokens} tokens, val={val_tokens} tokens "
-        f"(estimated {train_budget}/{val_budget})."
-    )
+    print(f"Prepared {documents} documents ({sample_bytes / 1024**2:.1f} MiB tokenizer sample); train={train_tokens} tokens, val={val_tokens} tokens (estimated {train_budget}/{val_budget}).")
 
 
 def main():

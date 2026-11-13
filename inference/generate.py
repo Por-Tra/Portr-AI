@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -81,7 +82,11 @@ def load_model_from_final_state( final_model_path, tokenizer, device = "cpu"):
     embedding_dim = int(hparams.get("embedding_dim") or 256)
     num_heads = int(hparams.get("num_heads") or 8)
     num_blocks = int(hparams.get("num_blocks") or 4)
-    dropout = float(hparams.get("dropout") or 0.1)
+    dropout = float(hparams.get("dropout", 0.1))
+    expected_fingerprint = payload.get("tokenizer_fingerprint")
+
+    if expected_fingerprint and tokenizer.fingerprint(vocab_size=vocab_size) != expected_fingerprint:
+        raise RuntimeError("Tokenizer incompatible avec les IDs et regles BPE du modele sauvegarde")
 
     model = GPT(
         vocab_size=vocab_size,
@@ -182,14 +187,16 @@ def generate_from_prompt(model, tokenizer, prompt, max_new_tokens = 40,temperatu
         use_sft_template (bool, optional): Utilise le template instruction/réponse SFT. Defaults to True.
 
     Raises:
-        ValueError: Si le modèle ne contient pas les tokens nécessaires pour le template SFT.
+        ValueError: Si le prompt est vide.
+        ValueError: Si max_new_tokens n'est pas un entier positif.
 
     Returns:
-        Tuple[list[int], str]: Liste des IDs des tokens générés et texte décodé.
+        Tuple[list[int], str]: IDs complets (prompt inclus), et texte de la continuation seule.
     """
-    model.eval()
-
     token_to_id = tokenizer.get_token_to_id()
+    if not isinstance(max_new_tokens, int) or isinstance(max_new_tokens, bool) or max_new_tokens < 0:
+        raise ValueError("max_new_tokens doit etre un entier >= 0")
+    
     if use_sft_template:
         prompt_ids = build_sft_prompt_ids(prompt, tokenizer)
         stop_token_id = token_to_id["<|end|>"]
@@ -203,7 +210,8 @@ def generate_from_prompt(model, tokenizer, prompt, max_new_tokens = 40,temperatu
     vocab_size = int(getattr(model, "vocab_size", 0))
 
     #& Vérification de la compatibilité du vocabulaire
-    if vocab_size and any(token_id >= vocab_size for token_id in prompt_ids):
+    checked_ids = prompt_ids + ([stop_token_id] if stop_token_id is not None else [])
+    if vocab_size and any(token_id < 0 or token_id >= vocab_size for token_id in checked_ids):
         raise ValueError("Le modèle ne contient pas les tokens du template SFT.\nChargez un modèle redimensionné pour le vocabulaire SFT.")
 
     input_tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)

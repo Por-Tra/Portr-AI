@@ -48,7 +48,7 @@ The data sources, tokenizer and quality filters are configured for French. The p
 
 ```mermaid
 flowchart LR
-    A["Collection<br/>web and local sources"] --> B["Cleaning<br/>chunking, near-dedup"]
+    A["Hugging Face<br/>Luciole Fineweb2-HQ / fr"] --> B["Cleaning<br/>document split, EOS"]
     B --> C["Tokenization<br/>BPE from scratch"]
     C --> D["Training<br/>AdamW, AMP, checkpoints"]
     D --> E["Inference<br/>KV cache, top-k sampling"]
@@ -107,11 +107,8 @@ For GPU training, install PyTorch with the official command matching your CUDA v
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Optional PDF and Wikipedia ZIM support:
-
-```bash
-pip install pdfminer.six libzim
-```
+The current pipeline reads the Hugging Face datasets. It does not invoke a PDF,
+Wikipedia ZIM or legacy web crawler.
 
 ---
 
@@ -137,12 +134,17 @@ The generated files are `data/datasets/train.jsonl`, `data/datasets/val.jsonl`,
 python main.py
 ```
 
-The interactive pipeline asks for:
+The manager exposes preparation, training and inference as separate actions:
+`1` status, `2` prepare pretraining, `3` resume base training, `4` fresh base,
+`5` prepare SFT, `6` resume SFT, `7` base inference, `8` SFT inference,
+`9` full base pipeline, `10` fresh SFT in an isolated run directory.
 
-- the tokenizer mode: `auto`, `use_existing` or `retrain`
-- the encoding cache mode: `auto`, `use_precomputed` or `recompute`
-
-Training resumes automatically from the last checkpoint when `RESUME_FROM_CHECKPOINT = True`. Curves (loss, perplexity, learning rate) are saved in `artifacts/` and can be viewed with TensorBoard.
+A compatible checkpoint is required to resume. Completed or incompatible runs
+are rejected explicitly. New checkpoints record the training contract, tokenizer
+fingerprint and CPU/CUDA RNG state. Training gradients and logged loss are weighted
+by supervised token counts across accumulated micro-batches. Metrics are CSV files
+under `artifacts/`; `tools/analyze_benchmark.py` creates the plots and report.
+Train loss includes regularization and mandatory UL; perplexity comes from validation CE.
 
 <p align="center">
   <img src="asset/grad_norm.png" width="48%" alt="Norme des gradients"/>
@@ -152,7 +154,10 @@ Training resumes automatically from the last checkpoint when `RESUME_FROM_CHECKP
 
 ### 3. Inference
 
-Inference runs at the end of `main.py`, or on its own from the saved model by setting `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. An interactive reprompt mode then lets you test several prompts without restarting the pipeline:
+Use menu action `7` or `8` for inference. In action `9`, setting
+`INFERENCE_ONLY_FROM_FINAL_MODEL = True` skips data preparation and training.
+Inference loads trained embeddings without adding random vocabulary rows.
+An interactive reprompt mode lets you test independent prompts; it does not retain conversation history:
 
 ```
 [main] reprompt mode active
@@ -179,7 +184,7 @@ All parameters are centralized in `main.py` unless stated otherwise. Warmup is c
 | `NUM_BLOCKS` | 4 | Transformer blocks |
 | `SEQ_LENGTH` | 256 | Context length |
 | `dropout` | 0.1 | Dropout rate |
-| Total parameters | about 18.7M | `small` configuration |
+| Total parameters | about 13.3M | Current tied-embedding configuration |
 
 **Training**
 
@@ -196,6 +201,40 @@ All parameters are centralized in `main.py` unless stated otherwise. Warmup is c
 | `USE_AMP` | True | Mixed precision (float16 on GPU) |
 | `CHECKPOINT_EVERY` | 500 | Asynchronous checkpoint frequency, in steps |
 | `RESUME_FROM_CHECKPOINT` | True | Resume from the last checkpoint |
+
+**Mandatory repetition unlikelihood during training**
+
+The training objective adds `alpha * -log(1 - p(negative_token))` for tokens
+that would complete a previously seen n-gram in the supervised history. This is
+a selective token-level adaptation of [Welleck et al., 2019](https://arxiv.org/abs/1908.04319),
+not an inference repetition penalty or sampled sequence-level training.
+The correct next token is always excluded from negatives, including valid repeats.
+Masked prompts, padding and special tokens reset the history; document and answer
+boundaries are therefore respected by the standard pipeline.
+
+In `main.py`, `UNLIKELIHOOD_WEIGHT` for pretraining and
+`SFT_UNLIKELIHOOD_WEIGHT` for SFT both default to `0.1`. The penalty is always
+enabled: zero, negative, nonnumeric and nonfinite weights are rejected. Its
+strength remains adjustable, strictly above zero. `0.1` is a modest initial
+experimental coefficient, not a validated optimum on Portr-AI. Shared settings are
+`UNLIKELIHOOD_NGRAM_SIZE=4` **BPE tokens**, and `UNLIKELIHOOD_WINDOW=64`
+previous completion positions. Direct training API callers use the corresponding
+`TrainConfig`/`SFTConfig` fields and must supply special/boundary IDs through
+`unlikelihood_exclude_token_ids`; labels use `-100` for ignored positions.
+
+Validation uses pure cross-entropy, without this penalty. New checkpoints record
+the settings and reject a resume with a different objective. Legacy checkpoints
+without those settings, and checkpoints with zero weight, cannot resume training
+silently; their weights can still initialize a new SFT run (menu option 10).
+Use separate configured output directories for
+a new pretraining run. No actual Portr-AI model has been retrained with this feature.
+It adds compute, does not detect semantic filler, and cannot guarantee removal of
+repetition or preservation of every legitimate alternative. Compare generations
+and validation CE on otherwise matched runs. Details: [pipeline review](docs/REVUE_PIPELINE.md).
+Run the feature tests with `python -B -m unittest discover -s training/tests -v`.
+Synthetic microbenchmark on an RTX 4060 Laptop, bf16, batch 8: about 15–16% extra
+forward/loss/backward time for pretraining and 22–26% for SFT in the tested cases.
+These are not full training-run estimates; setup and limitations are in the linked details.
 
 **Inference**
 
@@ -225,7 +264,7 @@ All parameters are centralized in `main.py` unless stated otherwise. Warmup is c
 | BPE tokenizer | Incremental pair counting, max-heap with lazy deletion, word-to-ids cache | Fast training and encoding without the naive O(N x V) pair count |
 | Attention | Flash Attention (`sdpa`), KV cache, `is_causal` disabled during decode | 2-4x less VRAM, no recomputation of past tokens |
 | Training | Mixed precision with `GradScaler`, gradient accumulation, fused AdamW with decay/no-decay groups, cosine schedule with warmup | Stable training and a large effective batch on limited VRAM |
-| I/O | Asynchronous checkpoints in a daemon thread, deferred `loss.item()` | No blocking on disk writes or GPU-CPU sync |
+| I/O | Asynchronous checkpoints in a joined thread, explicit write errors | CPU snapshots plus background disk writes |
 | Data | Lightweight filtering, document-hash validation split, EOS-separated streaming encoding, memory-mapped binary cache (`int32`) | Corpus never fully loaded in RAM |
 
 The `is_causal` flag must be `False` during decode (when `past_kv is not None`), otherwise the whole KV cache is masked out and ignored.
@@ -252,7 +291,8 @@ Portr-AI/
 ## Roadmap
 
 - [x] BPE tokenizer from scratch (heap-optimized)
-- [x] Data pipeline: collection, cleaning, near-deduplication
+- [x] Data pipeline: Hugging Face streaming, cleaning, document splits and EOS
+- [ ] Local near-deduplication and semantic contamination audit
 - [x] GPT model: embeddings, attention with KV cache, Transformer blocks
 - [x] Training loop: mixed precision, gradient accumulation, async checkpoints
 - [x] Text generation: top-k, temperature, reprompt mode
@@ -408,12 +448,17 @@ Sorties : `data/datasets/train.jsonl`, `data/datasets/val.jsonl`,
 python main.py
 ```
 
-Le pipeline interactif demande :
+Le manager propose des actions distinctes : `1` état, `2` préparation de la base,
+`3` reprise de base, `4` base neuve, `5` préparation SFT, `6` reprise SFT,
+`7` inférence de base, `8` inférence SFT, `9` pipeline de base complet,
+`10` nouveau SFT depuis la base dans un dossier isolé.
 
-- le mode du tokenizer : `auto`, `use_existing` ou `retrain`
-- le mode du cache d'encodage : `auto`, `use_precomputed` ou `recompute`
-
-L'entraînement reprend automatiquement depuis le dernier checkpoint si `RESUME_FROM_CHECKPOINT = True`. Les courbes (loss, perplexité, learning rate) sont sauvegardées dans `artifacts/` et visualisables avec TensorBoard.
+Une reprise exige un checkpoint compatible. Les nouveaux checkpoints conservent
+le contrat du run, l'empreinte du tokenizer et les états aléatoires CPU/CUDA.
+L'accumulation des gradients et les moyennes de loss sont pondérées par le nombre
+de tokens supervisés. Les métriques sont des CSV dans `artifacts/` ;
+`tools/analyze_benchmark.py` produit les graphiques et le rapport.
+La loss train inclut les régularisations et UL ; la perplexité vient de la CE de validation.
 
 <p align="center">
   <img src="asset/grad_norm.png" width="48%" alt="Norme des gradients"/>
@@ -423,7 +468,10 @@ L'entraînement reprend automatiquement depuis le dernier checkpoint si `RESUME_
 
 ### 3. Inférence
 
-L'inférence s'exécute à la fin de `main.py`, ou seule à partir du modèle sauvegardé en réglant `INFERENCE_ONLY_FROM_FINAL_MODEL = True`. Un mode interactif permet ensuite de tester plusieurs prompts sans relancer le pipeline :
+Choisir `7` ou `8` pour l'inférence. Avec l'action `9`,
+`INFERENCE_ONLY_FROM_FINAL_MODEL = True` évite aussi la préparation des données.
+L'inférence conserve le vocabulaire entraîné sans ajouter de lignes aléatoires.
+Le mode interactif teste plusieurs prompts indépendants, sans historique de dialogue :
 
 ```
 [main] reprompt mode active
@@ -450,7 +498,7 @@ Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. L
 | `NUM_BLOCKS` | 4 | Blocs Transformer |
 | `SEQ_LENGTH` | 256 | Longueur du contexte |
 | `dropout` | 0.1 | Taux de dropout |
-| Paramètres totaux | environ 18,7 M | Configuration `small` |
+| Paramètres totaux | environ 13,3 M | Configuration actuelle avec poids d'embedding partagés |
 
 **Entraînement**
 
@@ -467,6 +515,51 @@ Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. L
 | `USE_AMP` | True | Précision mixte (float16 sur GPU) |
 | `CHECKPOINT_EVERY` | 500 | Fréquence des checkpoints asynchrones, en pas |
 | `RESUME_FROM_CHECKPOINT` | True | Reprise depuis le dernier checkpoint |
+
+**Anti-répétition obligatoire pendant l'entraînement : unlikelihood**
+
+L'objectif ajoute `alpha * -log(1 - p(token_negatif))` aux tokens qui termineraient
+un n-gramme déjà vu dans le passé supervisé. C'est une adaptation sélective de
+l'[unlikelihood de Welleck et al.](https://arxiv.org/abs/1908.04319), appliquée aux
+prédictions de tokens pendant l'entraînement. La cible correcte est toujours
+retirée des négatifs, même si elle répète une séquence légitime. Prompts masqués,
+padding et tokens spéciaux coupent l'historique ; les limites de documents et de
+réponses sont respectées par le pipeline standard.
+
+Réglages dans `main.py` :
+
+| Réglage | Défaut | Effet |
+|---|---|---|
+| `UNLIKELIHOOD_WEIGHT` | `0.1` | Poids alpha strictement positif pour le pré-entraînement |
+| `SFT_UNLIKELIHOOD_WEIGHT` | `0.1` | Poids alpha strictement positif pour le SFT, indépendant du précédent |
+| `UNLIKELIHOOD_NGRAM_SIZE` | `4` | Taille des n-grammes en **tokens BPE**, minimum 2 |
+| `UNLIKELIHOOD_WINDOW` | `64` | Distance maximale des complétions antérieures, au moins la taille du n-gramme |
+
+La pénalité est toujours active en pré-entraînement et SFT. Sa force reste
+réglable, mais zéro, les valeurs négatives, non numériques ou non finies sont
+refusés. Le coefficient initial `0.1` est volontairement modéré et expérimental,
+sans validation sur Portr-AI. Choisir **10** pour un nouveau SFT depuis la base.
+Pour un nouveau pré-entraînement, utiliser des répertoires de sortie distincts.
+Les API exposent les champs `unlikelihood_*` dans `TrainConfig` et `SFTConfig` ;
+les appelants directs doivent fournir les IDs spéciaux/frontières dans
+`unlikelihood_exclude_token_ids` et masquer les positions ignorées avec `-100`.
+
+La validation reste en cross-entropy pure : sa perplexité n'inclut pas la pénalité.
+Les nouveaux checkpoints enregistrent les réglages et refusent une reprise avec
+un objectif différent. Les checkpoints historiques sans ces métadonnées, ou avec
+un poids nul, ne peuvent plus reprendre l'entraînement silencieusement. Leurs
+poids restent utilisables comme base d'un nouveau SFT ; aucun ancien fichier
+n'est migré ou écrasé automatiquement.
+Aucun modèle Portr-AI n'a été réentraîné avec cet ajout. Cette méthode ajoute du
+calcul, ne reconnaît pas les « mots inutiles » au sens sémantique et ne garantit
+pas la disparition des répétitions. Elle ne pénalise pas les répétitions qui
+constituent la cible correcte du corpus. Comparer CE et générations sur des runs
+comparables reste nécessaire. Voir [la portée et les tests](docs/REVUE_PIPELINE.md).
+Tests de cette fonctionnalité : `python -B -m unittest discover -s training/tests -v`.
+Sur un microbenchmark synthétique RTX 4060 Laptop, bf16, batch 8, le surcoût
+forward/loss/backward mesuré est d'environ 15–16 % en pré-entraînement et
+22–26 % en SFT selon les motifs testés. Ce ne sont pas des estimations du temps
+d'un run complet ; protocole et limites figurent dans la documentation liée.
 
 **Inférence**
 
@@ -496,7 +589,7 @@ Tous les paramètres sont centralisés dans `main.py`, sauf mention contraire. L
 | Tokenizer BPE | Comptage incrémental des paires, max-heap avec suppression paresseuse, cache mot vers ids | Entraînement et encodage rapides, sans le comptage naïf en O(N x V) |
 | Attention | Flash Attention (`sdpa`), KV cache, `is_causal` désactivé au décodage | 2 à 4 fois moins de VRAM, aucun recalcul du passé |
 | Entraînement | Précision mixte avec `GradScaler`, accumulation de gradients, AdamW fusionné avec groupes decay/no-decay, schedule cosinus avec warmup | Entraînement stable et grand batch effectif malgré une VRAM limitée |
-| E/S | Checkpoints asynchrones dans un thread daemon, `loss.item()` différé | Pas de blocage sur les écritures disque ni de synchronisation GPU-CPU |
+| E/S | Checkpoints asynchrones, attente finale et erreurs remontées | Snapshot CPU et écriture disque en arrière-plan |
 | Données | Filtre léger, split validation par hash de document, EOS entre documents, encodage en streaming, cache binaire mémoire-mappé (`int32`) | Corpus jamais chargé entièrement en RAM |
 
 Le flag `is_causal` doit être à `False` au décodage (quand `past_kv is not None`), sinon tout le KV cache est masqué et ignoré.

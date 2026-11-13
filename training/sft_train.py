@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -22,7 +23,7 @@ import torch
 
 from training.loss import autoregressive_cross_entropy
 from training.optimizer import create_adamw_optimizer
-from training.train import TrainConfig, train_model
+from training.train import TrainConfig, train_model, resolve_device
 
 
 @dataclass
@@ -40,6 +41,11 @@ class SFTConfig(TrainConfig):
     label_smoothing: float = 0.0
     z_loss_weight: float = 0.0
     benchmark_path: str = "artifacts/benchmarks/sft_training_benchmark.csv"
+    unlikelihood_weight = 0.1   #& Poids de la loss unlikelihood (0 = désactivée)
+    unlikelihood_ngram_size = 4  #& Taille des n-grammes à pénaliser
+    unlikelihood_window = 64   #& Fenêtre de contexte pour la détection des répétitions
+    unlikelihood_exclude_token_ids: tuple[int, ...] = ()    #& IDs de tokens à exclure de la pénalisation (ex: padding, prompt, etc.)
+    tokenizer_fingerprint = None
 
 
 def train_sft_model(model, dataloader, config = None, val_dataloader=None, optimizer = None):
@@ -60,6 +66,8 @@ def train_sft_model(model, dataloader, config = None, val_dataloader=None, optim
         [torch.nn.Module]: Modèle entraîné.
     """
     config = config or SFTConfig()
+    if optimizer is None: model.to(resolve_device(config.device))
+
     optimizer = optimizer or create_adamw_optimizer(
         model,
         lr=config.learning_rate,
@@ -82,7 +90,7 @@ def train_sft_model(model, dataloader, config = None, val_dataloader=None, optim
         loss_fn=loss_fn,
         config=config,
         val_dataloader=val_dataloader,
-        eval_loss_fn =loss_fn
+        eval_loss_fn=autoregressive_cross_entropy
     )
 
 
