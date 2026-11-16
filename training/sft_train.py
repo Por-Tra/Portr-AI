@@ -41,11 +41,11 @@ class SFTConfig(TrainConfig):
     label_smoothing: float = 0.0
     z_loss_weight: float = 0.0
     benchmark_path: str = "artifacts/benchmarks/sft_training_benchmark.csv"
-    unlikelihood_weight = 0.1   #& Poids de la loss unlikelihood (0 = désactivée)
-    unlikelihood_ngram_size = 4  #& Taille des n-grammes à pénaliser
-    unlikelihood_window = 64   #& Fenêtre de contexte pour la détection des répétitions
+    unlikelihood_weight: float = 0.1   #& Poids strictement positif de la loss unlikelihood
+    unlikelihood_ngram_size: int = 4  #& Taille des n-grammes à pénaliser
+    unlikelihood_window: int = 64   #& Fenêtre de contexte pour la détection des répétitions
     unlikelihood_exclude_token_ids: tuple[int, ...] = ()    #& IDs de tokens à exclure de la pénalisation (ex: padding, prompt, etc.)
-    tokenizer_fingerprint = None
+    tokenizer_fingerprint: str | None = None
 
 
 def train_sft_model(model, dataloader, config = None, val_dataloader=None, optimizer = None):

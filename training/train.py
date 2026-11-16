@@ -72,12 +72,12 @@ class TrainConfig:
 
     #* torch.compile (nécessite Triton : Linux, ou triton-windows sous Windows)
     compile_model: bool = False
-    unlikelihood_weight = 0.1   #& Poids de la loss unlikelihood (0 = désactivée)
-    unlikelihood_ngram_size= 4  #& Taille des n-grammes à pénaliser
+    unlikelihood_weight: float = 0.1   #& Poids strictement positif de la loss unlikelihood
+    unlikelihood_ngram_size: int = 4  #& Taille des n-grammes à pénaliser
     unlikelihood_window: int = 64   #& Fenêtre de contexte pour la détection des répétitions
     unlikelihood_exclude_token_ids: tuple[int, ...] = ()    #& IDs de tokens à exclure de 
                                                             #& la pénalisation (ex: padding, prompt, etc.)
-    tokenizer_fingerprint = None
+    tokenizer_fingerprint: str | None = None
     data_identity: dict = field(default_factory=dict)
 
     def __post_init__(self):
