@@ -8,7 +8,7 @@
 ██           █████   █████  ██        ████     ██              ███        ███ ██
 ██             █████████    ██         ███████ ██             ███          ██ ██
 
-auteur : @Lucas Contreras Hodapp
+auteur : @Lucas Contreras Hodapp & ChatGPT(LLM - AI)
 
 File name : prepare_sft_data.py
 
@@ -43,6 +43,112 @@ BANNED_IN_ANSWER = ("en tant qu'ia", "en tant qu'assistant", "en tant qu'intelli
 NOISE_MARKERS = ("url_", "\\pos", "\\displaystyle")
 IGNORE_INDEX = -100
 LABEL_ALIGNMENT_VERSION = 3
+SPLIT_STRATEGY = "prompt_groups_v1"
+
+
+def prompt_key(example):
+    """ Génère une clé unique pour un exemple basé sur le prompt, utilisée pour la déduplication et la séparation train/val.
+
+    Args:
+        example (List[tuple(int)]): exemple SFT sous forme de tuple (input_ids, labels).
+
+    Returns:
+        tuple: Une clé unique basée sur le prompt, utilisée pour la déduplication et la séparation train/val.
+    """
+    x, y = example
+    start = next(i for i, token in enumerate(y) if token != IGNORE_INDEX)
+    return tuple(x[:start + 1])
+
+
+def split_prompt_groups(examples, val_ratio, seed, group_ids=None, reserved_prompts=(), split_ids=None):
+    """Deduplicate pairs and keep every prompt (and declared task) in one split.
+
+    Optional local-data group IDs can also keep paraphrases of one task together.
+    Group sizes make the requested validation ratio approximate.
+    """
+    if not 0 < val_ratio < 1:
+        raise ValueError("val_ratio doit etre compris entre 0 et 1")
+    if group_ids is None:
+        group_ids = [None] * len(examples)
+    if len(group_ids) != len(examples):
+        raise ValueError("Un groupe est requis par exemple")
+    if split_ids is None:
+        split_ids = [None] * len(examples)
+    if len(split_ids) != len(examples):
+        raise ValueError("Un split est requis par exemple")
+    explicit = any(s is not None for s in split_ids)
+    if explicit and any(s not in ("train", "dev", "val") for s in split_ids):
+        raise ValueError("Les splits locaux doivent tous etre train, dev ou val")
+    groups, owners, seen = {}, {}, set()
+    assignments = {}
+    duplicates = 0
+    for example, declared, split in zip(examples, group_ids, split_ids):
+        key = prompt_key(example)
+        group = ("task", str(declared)) if declared is not None else ("prompt", key)
+        if key in owners and owners[key] != group:
+            raise ValueError("Une meme question est affectee a plusieurs groupes")
+        owners[key] = group
+        if explicit:
+            split = "val" if split in ("dev", "val") else "train"
+            if group in assignments and assignments[group] != split:
+                raise ValueError("Un groupe local traverse train et val")
+            assignments[group] = split
+        pair = (tuple(example[0]), tuple(example[1]))
+        if pair in seen:
+            duplicates += 1
+            continue
+        seen.add(pair)
+        groups.setdefault(group, []).append(example)
+    if len(groups) < 2:
+        raise ValueError("Il faut au moins deux groupes de questions distincts pour separer train et val sans fuite")
+    reserved = {owners[p] for p in reserved_prompts if p in owners}
+    if explicit:
+        if any(assignments[g] == "val" for g in reserved):
+            raise ValueError("Une question d'identite est presente en validation")
+        train = [e for g, values in groups.items() if assignments[g] == "train" for e in values]
+        val = [e for g, values in groups.items() if assignments[g] == "val" for e in values]
+        if not train or not val:
+            raise ValueError("Les splits locaux train et val doivent etre non vides")
+        return train, val, {"strategy": SPLIT_STRATEGY, "explicit_splits": True,
+            "duplicates_removed": duplicates, "prompt_overlap": 0,
+            "train_groups": sum(s == "train" for s in assignments.values()),
+            "val_groups": sum(s == "val" for s in assignments.values())}
+    keys = [key for key in groups if key not in reserved]
+    random.Random(seed).shuffle(keys)
+    target = max(1, round(sum(map(len, groups.values())) * val_ratio))
+    chosen, count = set(), 0
+    for key in keys:
+        if len(chosen) + 1 >= len(groups):
+            continue  # Always preserve a nonempty training split.
+        candidate = count + len(groups[key])
+        if candidate <= target or abs(candidate - target) < abs(count - target):
+            chosen.add(key)
+            count = candidate
+    if not chosen:
+        if not keys:
+            raise ValueError("Tous les groupes sont reserves a l'entrainement")
+        chosen.add(min(keys, key=lambda key: len(groups[key])))
+    train = [example for key, values in groups.items() if key not in chosen for example in values]
+    val = [example for key, values in groups.items() if key in chosen for example in values]
+    rng = random.Random(seed)
+    rng.shuffle(train)
+    rng.shuffle(val)
+    return train, val, {"strategy": SPLIT_STRATEGY, "duplicates_removed": duplicates,
+                        "train_groups": len(groups) - len(chosen), "val_groups": len(chosen),
+                        "prompt_overlap": 0}
+
+
+def local_records(path):
+    """Read explicit local prompt/answer records without downloading a dataset."""
+    with Path(path).open(encoding="utf-8") as source:
+        for line_no, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("prompt", "answer")):
+                raise ValueError(f"Paire prompt/answer invalide: {path}:{line_no}")
+            yield {"source": "local", "group": item.get("group"), "split": item.get("split"), "conversation": [
+                {"role": "user", "text": item["prompt"]}, {"role": "assistant", "text": item["answer"]}]}
 
 
 def source_allowed(source):
@@ -259,10 +365,11 @@ def prepare(args: argparse.Namespace):
     if args.identity_jsonl and args.identity_repeat < 0:
         raise ValueError("--identity-repeat doit etre >= 0")
 
-    dataset = load_dataset(DATASET_NAME, split=args.split)
+    local_path = getattr(args, "local_jsonl", None)
+    dataset = list(local_records(local_path)) if local_path else load_dataset(DATASET_NAME, split=args.split)
 
     if args.list_sources:
-        counts = Counter(str(source) for source in dataset["source"])
+        counts = Counter(str(record.get("source")) for record in dataset)
         for source, count in counts.most_common():
             status = "gardee" if source_allowed(source) else "ecartee"
             print(f"[{status}] {count:>7}  {source}")
@@ -289,7 +396,7 @@ def prepare(args: argparse.Namespace):
             rejects["code"] += 1
             continue
 
-        if not source_allowed(record.get("source")):
+        if not local_path and not source_allowed(record.get("source")):
             rejects["source_ecartee"] += 1
             continue
 
@@ -297,14 +404,16 @@ def prepare(args: argparse.Namespace):
         if pair is None:
             rejects[reason or "inconnu"] += 1
             continue
-        pairs.append(pair)
+        pairs.append((*pair, record.get("group") if local_path else None, record.get("split") if local_path else None))
 
     rng.shuffle(pairs)
     target_val = max(1, round(args.max_examples * args.val_ratio))
     target_total = args.max_examples + target_val if args.max_examples else None
     examples: list[tuple[list[int], list[int]]] = []
+    group_ids = []
+    split_ids = []
 
-    for prompt, answer in pairs:
+    for prompt, answer, group_id, split_id in pairs:
         if target_total is not None and len(examples) >= target_total:
             break
 
@@ -324,16 +433,12 @@ def prepare(args: argparse.Namespace):
             continue
 
         examples.append(example)
+        group_ids.append(group_id)
+        split_ids.append(split_id)
 
     if len(examples) < 2:
         raise ValueError("Il faut au moins deux exemples SFT valides pour train et val.")
-    rng.shuffle(examples)
-
-    #& Séparation train/val
-    target_val = min(target_val, max(1, round(len(examples) * args.val_ratio))) if args.max_examples else max(1, round(len(examples) * args.val_ratio))
-    val = examples[: min(target_val, len(examples) - 1)]
-    train = examples[len(val) :]
-
+    identity_examples = []
     if args.identity_jsonl:
 
         identity_count = 0
@@ -355,11 +460,17 @@ def prepare(args: argparse.Namespace):
                 rejects[f"identite_{reason or 'inconnu'}"] += 1
                 continue
 
-            train.extend([example] * args.identity_repeat)
+            if args.identity_repeat:
+                identity_examples.append(example)
             identity_count += 1
-
-        rng.shuffle(train)
         print(f"Exemples identite ajoutes: {identity_count} x {args.identity_repeat}")
+
+    train, val, split_stats = split_prompt_groups(
+        examples, args.val_ratio, args.seed, group_ids,
+        reserved_prompts={prompt_key(example) for example in identity_examples}, split_ids=split_ids)
+    for example in identity_examples:
+        train.extend([example] * args.identity_repeat)
+    rng.shuffle(train)
 
     out_prefix = args.out_prefix
     train_path = out_prefix.with_name(f"{out_prefix.name}_train.npz")
@@ -368,7 +479,8 @@ def prepare(args: argparse.Namespace):
     val_stats = save_split(val_path, val, special_ids[3])
 
     metadata = {
-        "dataset": DATASET_NAME,
+        "dataset": str(local_path) if local_path else DATASET_NAME,
+        "source_sha256": sha256_file(local_path) if local_path else None,
         "split": args.split,
         "tokenizer_path": str(args.tokenizer_path),
         "tokenizer_vocab_size": len(token_to_id),
@@ -383,7 +495,8 @@ def prepare(args: argparse.Namespace):
         "context_mode": args.context_mode,
         "train": train_stats,
         "val": val_stats,
-        "rejects": dict(rejects)
+        "rejects": dict(rejects),
+        "split_groups": split_stats
     }
 
     metadata_path = out_prefix.with_name(f"{out_prefix.name}_meta.json")
@@ -407,7 +520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seq-length", type=int, default=256)
     parser.add_argument("--max-examples", type=int, default=30_000)
     parser.add_argument("--val-ratio", type=float, default=0.01)
-    parser.add_argument("--min-answer-tokens", type=int, default=3)
+    parser.add_argument("--min-answer-tokens", type=int, default=1)
     parser.add_argument("--max-answer-tokens", type=int, default=160)
     parser.add_argument("--max-prompt-tokens", type=int, default=None)
     parser.add_argument("--context-mode", choices=("merge", "skip", "drop"), default="merge")
@@ -415,6 +528,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--identity-repeat", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out-prefix", type=Path, default=DEFAULT_OUT_PREFIX)
+    parser.add_argument("--local-jsonl", type=Path, help="Paires locales prompt/answer, groupe de tache optionnel")
     parser.add_argument("--no-update-tokenizer", action="store_true", help="N'enregistre pas les tokens speciaux manquants dans le tokenizer")
     return parser.parse_args()
 

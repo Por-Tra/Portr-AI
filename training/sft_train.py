@@ -38,6 +38,7 @@ class SFTConfig(TrainConfig):
     final_model_dir: str = "artifacts/sft/models"
     final_model_name: str = "sft_final_state.pt"
     resume_from_checkpoint: bool = True
+    save_best_model_state: bool = True
     label_smoothing: float = 0.0
     z_loss_weight: float = 0.0
     benchmark_path: str = "artifacts/benchmarks/sft_training_benchmark.csv"
@@ -80,7 +81,8 @@ def train_sft_model(model, dataloader, config = None, val_dataloader=None, optim
             labels,
             ignore_index= -100,
             label_smoothing=config.label_smoothing,
-            z_loss_weight=config.z_loss_weight
+            z_loss_weight=config.z_loss_weight,
+            normalization=config.loss_normalization
         )
 
     return train_model(

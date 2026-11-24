@@ -47,6 +47,8 @@ class TrainConfig:
     resume_from_checkpoint: bool = True
     checkpoint_every_steps: int = 200        #& en optimizer steps
     save_final_model_state: bool = True
+    save_best_model_state: bool = False  # SFT may select by validation; base behavior stays unchanged.
+    loss_normalization: str = "supervised_tokens"
     final_model_dir: str = "artifacts/models"
     final_model_name: str = "gpt_final_state.pt"
     max_cpu_threads: int | None = None
@@ -82,6 +84,8 @@ class TrainConfig:
 
     def __post_init__(self):
         _unlikelihood_settings(self)
+        if self.loss_normalization not in ("supervised_tokens", "sequences"):
+            raise ValueError("Normalisation de loss invalide")
         if self.epochs <= 0 or self.grad_accum_steps <= 0 or self.log_interval <= 0:
             raise ValueError("epochs, grad_accum_steps et log_interval doivent etre positifs")
         if self.eval_max_batches is not None and self.eval_max_batches <= 0:
@@ -397,7 +401,8 @@ def load_checkpoint_if_available(model, optimizer, scheduler,
     return start_epoch, batch_in_epoch, global_step, epoch_losses, val_losses
 
 
-def save_final_model_state(model: torch.nn.Module, final_model_path: Path, device: torch.device, config: TrainConfig):
+def save_final_model_state(model: torch.nn.Module, final_model_path: Path, device: torch.device, config: TrainConfig,
+                           selection: dict | None = None):
     """ Sauvegarde l'état final du modèle après l'entraînement, avec les hyperparamètres et la configuration d'entraînement.
 
     Args:
@@ -422,6 +427,7 @@ def save_final_model_state(model: torch.nn.Module, final_model_path: Path, devic
             ) if hasattr(model, "embedding") else 0.0
         },
         "config": {
+            "loss_normalization": config.loss_normalization,
             "unlikelihood_settings": _unlikelihood_settings(config),
             "epochs":          int(config.epochs),
             "grad_clip":       float(config.grad_clip),
@@ -431,6 +437,8 @@ def save_final_model_state(model: torch.nn.Module, final_model_path: Path, devic
             "grad_accum_steps": int(config.grad_accum_steps)
         },
     }
+    if selection is not None: payload["selection"] = selection
+
     _atomic_save(_to_cpu_snapshot(payload), final_model_path)
 
 
@@ -754,7 +762,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
         training_loss_with_unlikelihood, base_loss_fn=loss_fn,
         weight=config.unlikelihood_weight, ngram_size=config.unlikelihood_ngram_size,
         window=config.unlikelihood_window,
-        exclude_token_ids=config.unlikelihood_exclude_token_ids
+        exclude_token_ids=config.unlikelihood_exclude_token_ids, normalization=config.loss_normalization
     )
     print(f"[train] unlikelihood obligatoire: weight={config.unlikelihood_weight} ngram={config.unlikelihood_ngram_size} window={config.unlikelihood_window}; validation sans UL")
 
@@ -768,7 +776,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     warmup_steps = (int(total_steps * config.warmup_ratio) if config.warmup_ratio is not None else int(config.warmup_steps))
     config.warmup_steps = warmup_steps
     run_contract = {
-        "version": 1, "normalization": "supervised_tokens", "epochs": config.epochs,
+        "version": 1, "normalization": config.loss_normalization, "epochs": config.epochs,
         "batch_size": getattr(dataloader, "batch_size", None), "grad_accum_steps": accum,
         "steps_per_epoch": steps_per_epoch, "total_steps": total_steps,
         "warmup_steps": warmup_steps, "lr_decay_factor": config.lr_decay_factor,
@@ -788,6 +796,8 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     use_amp = config.use_amp and device.type == "cuda"
     amp_dtype = _resolve_amp_dtype(device, config.amp_dtype)
     run_contract["precision"] = {"use_amp": use_amp, "dtype": str(amp_dtype) if use_amp else "float32"}
+    if config.save_best_model_state:
+        run_contract["model_selection"] = "best_validation_ce_v1"
     #& GradScaler uniquement utile en fp16 (bf16 a la même plage que fp32)
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp and amp_dtype == torch.float16)
 
@@ -829,13 +839,40 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
     last_train_loss = None
     last_learning_rate = 0.0
     last_grad_norm = 0.0
+    best_selection = None
+    if config.save_best_model_state and config.save_final_model_state and config.resume_from_checkpoint and ckpt_path.exists():
+
+        if final_model_path.exists():
+
+            saved_best = torch.load(final_model_path, map_location="cpu", weights_only=True)
+            best_selection = saved_best.get("selection")
+
+            if not best_selection or best_selection.get("run_contract") != run_contract:
+                raise RuntimeError("Meilleur modele incompatible avec le checkpoint de reprise. Choisir un nouveau run.")
+            del saved_best #~ libérer la mémoire
+
+        elif restored_val:
+            raise RuntimeError("Meilleur modele de validation absent pour cette reprise. Restaurer l'artefact ou choisir un nouveau run.")
 
     def _run_eval(tag: str): #& fonction interne pour évaluation périodique
-        nonlocal last_train_loss, last_learning_rate, last_grad_norm
+        nonlocal last_train_loss, last_learning_rate, last_grad_norm, best_selection
         if val_dataloader is None:
             return
         val_loss = evaluate(model, val_dataloader, eval_loss_fn, device, use_amp, amp_dtype, config.eval_max_batches)
         history["val_losses"].append(val_loss)
+
+        if config.save_best_model_state and config.save_final_model_state:
+            if best_selection is None or val_loss < best_selection["val_loss"]:
+
+                best_selection = {"criterion": "validation_ce",
+                                  "val_loss": val_loss,
+                                  "epoch": epoch + 1,
+                                  "step": global_step,
+                                  "run_contract": run_contract}
+
+                save_final_model_state(model, final_model_path, device, config, selection=best_selection)
+                print(f"[train] best validation model saved: step={global_step} val_loss={val_loss:.4f}")
+
         ppl = math.exp(min(val_loss, 50.0))
         training_benchmark(
             epoch=epoch + 1,
@@ -891,6 +928,7 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             supervised_tokens = int((y != -100).sum().item())
             if supervised_tokens == 0:
                 raise ValueError("Batch d'entrainement sans token supervise")
+            loss_units = x.shape[0] if config.loss_normalization == "sequences" else supervised_tokens
             _validate_token_batch(model, x, y)
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
@@ -902,8 +940,8 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
             is_last_accum = (batch_idx + 1 - group_start) == group_size
             if batch_idx == group_start:
                 group_tokens = 0
-                group_reference = max(group_size * x.numel(), 1)
-            group_tokens += supervised_tokens
+                group_reference = max(group_size * (x.shape[0] if config.loss_normalization == "sequences" else x.numel()), 1)
+            group_tokens += loss_units
 
             # * Forward + backward *
             loss = _run_forward_loss(
@@ -916,12 +954,12 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
                 use_amp=use_amp,
                 amp_dtype=amp_dtype
             )
-            scaler.scale(loss * (supervised_tokens / group_reference)).backward()
+            scaler.scale(loss * (loss_units / group_reference)).backward()
 
             #& Pas de .item() ici : accumulation sur GPU, sync uniquement au log
-            log_loss_accum += loss.detach() * supervised_tokens
+            log_loss_accum += loss.detach() * loss_units
             log_steps += 1
-            log_tokens += supervised_tokens
+            log_tokens += loss_units
             log_input_tokens += x.numel()
             steps += 1
 
@@ -1036,7 +1074,18 @@ def train_model(model: torch.nn.Module, dataloader, optimizer: torch.optim.Optim
 
     # * Artefact final *
     if config.save_final_model_state:
-        save_final_model_state(model=model, final_model_path=final_model_path, device=device, config=config)
+        if best_selection is not None:
+
+            best_payload = torch.load(final_model_path, map_location="cpu", weights_only=True)
+            model.load_state_dict(best_payload["model_state_dict"])
+
+            history["best_val_loss"] = best_selection["val_loss"]
+            history["best_epoch"] = best_selection["epoch"]
+            history["best_step"] = best_selection["step"]
+
+            del best_payload    #~ libérer la mémoire
+        else:
+            save_final_model_state(model=model, final_model_path=final_model_path, device=device, config=config)
         print(f"[train] final model state saved: {final_model_path}")
 
     return history

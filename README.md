@@ -460,6 +460,104 @@ de tokens supervisés. Les métriques sont des CSV dans `artifacts/` ;
 `tools/analyze_benchmark.py` produit les graphiques et le rapport.
 La loss train inclut les régularisations et UL ; la perplexité vient de la CE de validation.
 
+Le SFT conserve désormais **le meilleur modèle de validation** pour l'inférence,
+avec l'époque et le step retenus dans `selection`. Le checkpoint de reprise garde
+la dernière étape et son optimiseur. Ce choix ne change pas le comportement du
+pré-entraînement (`TrainConfig.save_best_model_state=False` par défaut).
+
+Les réponses d'un seul token sont acceptées. La préparation déduplique les paires
+et sépare train/validation par groupes de questions tokenisées : une question
+ayant plusieurs réponses reste entièrement dans un seul split. Une préparation
+ancienne doit être refaite avec l'option 5, puis un nouveau SFT démarré avec 10.
+La préparation échoue si le jeu ne contient qu'un seul groupe de questions.
+
+`SFT_LOCAL_JSONL_PATH` permet de choisir des paires locales `prompt`/`answer`,
+avec un champ `group` optionnel pour garder les paraphrases d'une tâche ensemble.
+Un champ `split` explicite (`train`, `dev` ou `val`) conserve les partitions lors
+d'une nouvelle préparation ; les groupes traversant plusieurs partitions sont refusés.
+Le profil actuel utilise **50 800 exemples d'entraînement** : instructions françaises
+de [Luth](https://huggingface.co/datasets/sammybow/luth-sft) filtrées et exercices
+vérifiés, dans `artifacts/sft/hf_training/20261117/ctx512/`. Ces références Luth ne
+sont pas toutes vérifiées factuellement. Le SFT actif a été poursuivi depuis le
+SFT précédent, pendant deux époques à `1e-5`. La base et ses fichiers restent intacts.
+`SFT_SEQ_LENGTH=512` est indépendant du contexte de base (`SEQ_LENGTH=256`) :
+`GPT.resize_context` étend les positions apprises avant de construire l'optimiseur.
+L'extension a été entraînée et mesurée pendant le SFT. Le batch CUDA vaut 16,
+avec accumulation sur 4 micro-batches. La loss donne le même poids à chaque
+exemple, pour conserver l'apprentissage des réponses courtes.
+
+Le [rapport de cette expérience](docs/EXPERIENCE_SFT_LUTH.md) décrit les sources,
+les tests réservés et les limites. **L'option 8 charge déjà le nouveau modèle**.
+L'option 10 démarre toujours un nouveau SFT depuis la base ; elle ne reproduit
+pas la continuation expérimentale. Pour répéter cette continuation sous un nouveau nom :
+
+```powershell
+python tools/hf_sft_experiment.py train --name nouveau512 --context 512 --epochs 2 --lr 0.00001 --normalization sequences
+```
+
+Les données Parquet épinglées sont conservées dans le dossier de l'expérience.
+Les outils de la première réparation restent disponibles :
+
+```powershell
+python tools/repair_sft.py build
+python tools/repair_sft.py baseline
+python tools/repair_sft.py train --name mixed2 --epochs 8 --lr 0.00003 --mix-old 4000
+python tools/repair_sft.py test --name mixed2
+```
+
+Choisir un nouveau nom si le run existe déjà. Les données et modèles précédents
+restent conservés. Le jeu de test est fixé avant les essais et les résultats de
+génération sont dans `artifacts/sft/repairs/20261116/`. Ces tests portent sur des
+consignes simples ; ils ne valident pas un assistant généraliste ni le calcul.
+L'option 8 ouvre directement la saisie d'une question. Le décodage SFT utilise
+une température de 0 et une limite de 128 nouveaux tokens, configurables par
+`SFT_INFER_TEMPERATURE` et `SFT_INFER_MAX_NEW_TOKENS`. Les réglages de génération
+du modèle de base restent indépendants.
+
+### Visualiser les embeddings du modèle
+
+`tools/visualize_model_embeddings.py` crée une carte HTML interactive autonome,
+avec recherche, sélection d'un point et voisins par similarité cosinus. Il charge
+par défaut le **SFT actuellement sélectionné** dans `artifacts/sft/active_run.json`,
+sans lancer d'entraînement. `--model base` choisit la base ; un chemin `.pt`
+permet de sélectionner un autre artefact. L'ancien `tools/visualize_embeddings.py`
+reste disponible.
+
+```powershell
+python tools/visualize_model_embeddings.py
+python tools/visualize_model_embeddings.py --model base --dims 3 --max-points 5000
+python tools/visualize_model_embeddings.py --kind positions
+python tools/visualize_model_embeddings.py --kind contextual --text "Le chat dort." --text "Le chat mange."
+```
+
+Les sorties sont dans `artifacts/visualizations/embeddings/`. Ouvrir le fichier
+`.html` dans un navigateur, sans serveur et sans connexion Internet. `--open`
+l'ouvre automatiquement. Le fichier `.json` voisin conserve les réglages et
+l'empreinte de la version lue du modèle. Le fichier est chargé en une seule
+image mémoire ; un entraînement qui le remplace ensuite ne modifie pas la carte.
+Relancer l'outil pour visualiser de nouveaux poids. `--export-vectors` ajoute un fichier `.npz` contenant
+les vecteurs affichés, leurs indices et les coordonnées projetées.
+
+Les modes sont `tokens` (table apprise), `positions` (positions apprises) et
+`contextual` (sorties du dernier bloc, après normalisation finale, pour chaque
+occurrence de token dans les textes fournis). Le mode contextual accepte aussi
+`--text-file chemin.txt`, un texte par ligne ; les textes trop longs sont refusés.
+Il encode le texte brut, sans ajouter les marqueurs de conversation SFT.
+Le même token peut donc avoir plusieurs représentations selon sa position et
+son contexte gauche. Ces vecteurs ne sont pas des embeddings de phrases.
+
+La projection PCA 2D est le défaut ; `--dims 3` active la 3D et `--method umap`
+utilise UMAP si le paquet optionnel `umap-learn` est installé. Les vecteurs sont
+normalisés L2 pour la projection (`--no-normalize` désactive ce choix). Les
+voisins sont calculés exactement dans les dimensions originales, parmi tous
+les vecteurs du mode choisi, même si `--max-points` limite l'affichage à un
+échantillon reproductible. Les vecteurs nuls sont exclus des similarités.
+La proximité sur une carte réduite ne garantit pas une proximité sémantique ;
+les tokens BPE peuvent être des fragments et les cartes séparées ne sont pas
+alignées pour comparer directement leurs coordonnées.
+
+Tests : `python -B -m unittest discover -s tools/tests -p test_visualize_model_embeddings.py -v`.
+
 <p align="center">
   <img src="asset/grad_norm.png" width="48%" alt="Norme des gradients"/>
   <img src="asset/loss.png" width="48%" alt="Courbes d'entraînement, graphique 2"/>

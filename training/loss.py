@@ -49,7 +49,7 @@ def validate_unlikelihood_parameters(weight, ngram_size, window):
 
 
 def repetition_unlikelihood(logits, targets, *, ngram_size = 4, window = 64, ignore_index = -100, 
-                            exclude_token_ids: tuple[int, ...] = ()):
+                            exclude_token_ids: tuple[int, ...] = (), normalization="supervised_tokens"):
     """ Calcul de la loss unlikelihood pour pénaliser les répétitions de n-grammes dans les séquences générées.
 
     Args:
@@ -69,6 +69,8 @@ def repetition_unlikelihood(logits, targets, *, ngram_size = 4, window = 64, ign
     Returns:
         torch.Tensor: La loss unlikelihood.
     """
+    if normalization not in ("supervised_tokens", "sequences"):
+        raise ValueError("Normalisation de loss invalide")
     if not isinstance(ngram_size, int) or isinstance(ngram_size, bool) or ngram_size < 2:
         raise ValueError("unlikelihood ngram_size doit etre un entier >= 2")
     if not isinstance(window, int) or isinstance(window, bool) or window < ngram_size:
@@ -132,12 +134,17 @@ def repetition_unlikelihood(logits, targets, *, ngram_size = 4, window = 64, ign
     #& Calcul des probabilités et pénalités pour les tokens négatifs
     probabilities = torch.where(negative_mask, log_probs.exp(), 0.0)
     penalties = -torch.log1p(-probabilities.clamp_max(1.0 - 1e-6))
+    if normalization == "sequences":
+        row_sums = logits.new_zeros(batch, dtype=penalties.dtype)
+        row_sums = row_sums.scatter_add(0, active.nonzero()[:, 0], penalties.sum(-1))
+        return (row_sums / supervised.sum(-1).clamp_min(1)).mean()
     return penalties.sum() / supervised.sum().clamp_min(1)
 
 
 def training_loss_with_unlikelihood(logits, targets, *, base_loss_fn, weight = 0.1,
                                      ngram_size = 4, window = 64,
-                                       ignore_index = -100, exclude_token_ids: tuple[int, ...] = ()):
+                                       ignore_index = -100, exclude_token_ids: tuple[int, ...] = (),
+                                       normalization="supervised_tokens"):
     """ Calcul de la loss d'entraînement combinant la cross-entropy et la loss unlikelihood
       pour pénaliser les répétitions de n-grammes.
 
@@ -158,12 +165,13 @@ def training_loss_with_unlikelihood(logits, targets, *, base_loss_fn, weight = 0
     base_loss = base_loss_fn(logits, targets)
     return base_loss + weight * repetition_unlikelihood(
         logits, targets, ngram_size=ngram_size, window=window,
-        ignore_index=ignore_index, exclude_token_ids=exclude_token_ids
+        ignore_index=ignore_index, exclude_token_ids=exclude_token_ids, normalization=normalization
     )
 
 
 def autoregressive_cross_entropy(logits, targets, ignore_index = -100, 
-                                 label_smoothing = 0.0, z_loss_weight = 0.0):
+                                 label_smoothing = 0.0, z_loss_weight = 0.0,
+                                 normalization="supervised_tokens"):
     """ Calcul de la cross-entropy pour un modèle autoregressif (GPT).
 
     Args:
@@ -174,6 +182,7 @@ def autoregressive_cross_entropy(logits, targets, ignore_index = -100,
         z_loss_weight (float, optional): Pénalité sur la Z-loss pour éviter les saturations softmax. Defaults to 0.0.
 
     Raises:
+        ValueError: Gestion des erreurs de paramètrage
         ValueError: Gestion des erreurs de paramètrage
         ValueError: Gestion des erreurs de paramètrage
         ValueError: Gestion des erreurs de paramètrage
@@ -189,6 +198,24 @@ def autoregressive_cross_entropy(logits, targets, ignore_index = -100,
     bsz, seq_len, vocab_size = logits.shape
     if targets.shape != (bsz, seq_len):
         raise ValueError(f"targets shape mismatch: logits={tuple(logits.shape)}, targets={tuple(targets.shape)}")
+    if normalization not in ("supervised_tokens", "sequences"):
+        raise ValueError("Normalisation de loss invalide")
+    if normalization == "sequences":
+        mask = targets != ignore_index
+        count = mask.sum(-1)
+        if torch.any(count == 0):
+            raise ValueError("Sequence sans token supervise")
+        
+        ce = F.cross_entropy(logits.reshape(-1,vocab_size),targets.reshape(-1), 
+                             ignore_index=ignore_index, 
+                             label_smoothing=label_smoothing,
+                             reduction="none").reshape(bsz,seq_len)
+        loss = (ce.sum(-1)/count).mean()
+
+        if z_loss_weight > 0:
+            z = logits.float().logsumexp(-1).square()
+            loss = loss + z_loss_weight*((z*mask).sum(-1)/count).mean()
+        return loss
 
     flat_logits = logits.reshape(-1, vocab_size)   #& reshape = view si contiguous, sinon copie
     flat_targets = targets.reshape(-1)

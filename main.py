@@ -127,20 +127,25 @@ MAX_TOKENS_FOR_TRAIN = None
 ENCODING_CACHE_PATH = "artifacts/cache/encoded_tokens.json"
 
 #* SFT data and training configuration
-SFT_DATASET_SPLIT = "train"
-SFT_MAX_EXAMPLES = 30_000   #& Nombre maximum d'exemples SFT à utiliser pour l'entrainement (0 = tous)
-SFT_VAL_RATIO = 0.01
-SFT_MIN_ANSWER_TOKENS = 3
-SFT_MAX_ANSWER_TOKENS = 160
+SFT_SEQ_LENGTH = 1024  # Independent from the base model's training context.
+SFT_LOSS_NORMALIZATION = "sequences"  # Equal example weight, including short exercises.
+SFT_BATCH_SIZE_CUDA = 16
+SFT_GRAD_ACCUM_STEPS_CUDA = 4
+SFT_DATASET_SPLIT = "local"
+SFT_LOCAL_JSONL_PATH = "artifacts/sft/hf_training/20261117/ctx512/source.jsonl"
+SFT_MAX_EXAMPLES = 0   # 0 = all examples from the selected local source.
+SFT_VAL_RATIO = 0.02  # Explicit train/dev assignments in the local source take priority.
+SFT_MIN_ANSWER_TOKENS = 1
+SFT_MAX_ANSWER_TOKENS = 320
 SFT_MAX_PROMPT_TOKENS = None
 SFT_CONTEXT_MODE = "merge"
 SFT_IDENTITY_JSONL_PATH = None
 SFT_IDENTITY_REPEAT = 3
-SFT_PREPARE_SEED = 426845132   #& Seed pour le mélange aléatoire des exemples SFT lors de la préparation du dataset
-SFT_OUT_PREFIX = Path("artifacts/sft/sft")
-SFT_TRAIN_PATH = Path("artifacts/sft/sft_train.npz")
-SFT_VAL_PATH = Path("artifacts/sft/sft_val.npz")
-SFT_META_PATH = Path("artifacts/sft/sft_meta.json")
+SFT_PREPARE_SEED = 20261117
+SFT_OUT_PREFIX = Path("artifacts/sft/hf_training/20261117/ctx512/sft")
+SFT_TRAIN_PATH = SFT_OUT_PREFIX.with_name(f"{SFT_OUT_PREFIX.name}_train.npz")
+SFT_VAL_PATH = SFT_OUT_PREFIX.with_name(f"{SFT_OUT_PREFIX.name}_val.npz")
+SFT_META_PATH = SFT_OUT_PREFIX.with_name(f"{SFT_OUT_PREFIX.name}_meta.json")
 SFT_CHECKPOINT_DIR = "artifacts/sft/checkpoints"
 SFT_CHECKPOINT_NAME = "sft_latest.pt"
 SFT_FINAL_MODEL_DIR = "artifacts/sft/models"
@@ -154,16 +159,19 @@ SFT_LABEL_SMOOTHING = 0.0
 SFT_Z_LOSS_WEIGHT = 0.0
 SFT_UNLIKELIHOOD_WEIGHT = 0.1  # Obligatoire (> 0), force reglable pour le SFT.
 SFT_LABEL_ALIGNMENT_VERSION = 3
+SFT_SPLIT_STRATEGY = "prompt_groups_v1"
 SFT_RESUME_FROM_CHECKPOINT = True
 SFT_CHECKPOINT_EVERY_STEPS = 100
-SFT_EVAL_INTERVAL = 0
-SFT_EVAL_MAX_BATCHES = 200
+SFT_EVAL_INTERVAL = 100
+SFT_EVAL_MAX_BATCHES = None
 
 #* Inference config
 INFER_PROMPT = "bonjour je suis un LLM français nommé Portr-AI."
 INFER_MAX_NEW_TOKENS = 512
 INFER_TEMPERATURE = 0.9
 INFER_TOP_K = 20
+SFT_INFER_TEMPERATURE = 0.0  # Match deterministic instruction evaluation.
+SFT_INFER_MAX_NEW_TOKENS = 128
 ENABLE_INTERACTIVE_REPROMPT = True
 INFERENCE_ONLY_FROM_FINAL_MODEL = False
 
@@ -287,7 +295,10 @@ def _sft_data_ready():
         return False
     if not isinstance(metadata, dict) or metadata.get("label_alignment_version") != SFT_LABEL_ALIGNMENT_VERSION:
         return False
-    if metadata.get("seq_length") != SEQ_LENGTH or metadata.get("ignore_index") != LOSS_IGNORE_INDEX:
+    split_groups = metadata.get("split_groups", {})
+    if not isinstance(split_groups, dict) or split_groups.get("strategy") != SFT_SPLIT_STRATEGY or split_groups.get("prompt_overlap") != 0:
+        return False
+    if metadata.get("seq_length") != SFT_SEQ_LENGTH or metadata.get("ignore_index") != LOSS_IGNORE_INDEX:
         return False
     special_tokens = metadata.get("special_tokens")
     if not isinstance(special_tokens, dict):
@@ -374,7 +385,7 @@ def _prepare_sft_data():
         list_sources=False,
         split=SFT_DATASET_SPLIT,
         tokenizer_path=Path(TOKENIZER_MODEL_PATH),
-        seq_length=SEQ_LENGTH,
+        seq_length=SFT_SEQ_LENGTH,
         max_examples=SFT_MAX_EXAMPLES,
         val_ratio=SFT_VAL_RATIO,
         min_answer_tokens=SFT_MIN_ANSWER_TOKENS,
@@ -385,8 +396,13 @@ def _prepare_sft_data():
         identity_repeat=SFT_IDENTITY_REPEAT,
         seed=SFT_PREPARE_SEED,
         out_prefix=SFT_OUT_PREFIX,
-        no_update_tokenizer=False
+        no_update_tokenizer=False,
+        local_jsonl=Path(SFT_LOCAL_JSONL_PATH) if SFT_LOCAL_JSONL_PATH else None
     ))
+
+
+def _sft_batch_config(device: torch.device):
+    return (SFT_BATCH_SIZE_CUDA, SFT_GRAD_ACCUM_STEPS_CUDA) if device.type == "cuda" else (BATCH_SIZE_CPU, GRAD_ACCUM_STEPS_CPU)
 
 
 def _build_sft_dataloaders(device: torch.device):
@@ -404,7 +420,7 @@ def _build_sft_dataloaders(device: torch.device):
         _type_: _description_
     """
     if not _sft_data_ready():
-        raise RuntimeError("Dataset SFT absent. Lancez d'abord l'action de preparation SFT.")
+        raise RuntimeError("Donnees SFT absentes ou preparation ancienne. Lancez l'action 5 pour une separation par groupes de questions.")
 
     train_dataset = SFTDataset(SFT_TRAIN_PATH)
     val_dataset = SFTDataset(SFT_VAL_PATH)
@@ -419,7 +435,7 @@ def _build_sft_dataloaders(device: torch.device):
     if len(train_dataset) == 0 or len(val_dataset) == 0:
         raise ValueError("Les splits SFT train et val doivent etre non vides.")
     
-    batch_size, _ = _batch_config(device)
+    batch_size, _ = _sft_batch_config(device)
     loader_kwargs = {
         "batch_size": batch_size,
         "num_workers": DATALOADER_NUM_WORKERS,
@@ -445,8 +461,10 @@ def _train_sft_pipeline(device: torch.device, fresh: bool = False):
 
     tokenizer_model = Tokenizer.load(TOKENIZER_MODEL_PATH)
     model, _payload = load_model_from_final_state(base_path, tokenizer_model, device=str(device))
-    if SEQ_LENGTH > model.seq_length:
-        raise RuntimeError("Les sequences SFT depassent le contexte du modele de base")
+    if SFT_SEQ_LENGTH > model.seq_length:
+        previous_context = model.seq_length
+        model.resize_context(SFT_SEQ_LENGTH)
+        print(f"[main] contexte SFT etendu: {previous_context} -> {SFT_SEQ_LENGTH}; nouvelles positions a apprendre")
     tokenizer_ids = tokenizer_model.get_token_to_id().values()
     required_vocab_size = max(len(tokenizer_model.get_token_to_id()), max(tokenizer_ids, default=-1) + 1)
     if required_vocab_size > model.vocab_size:
@@ -454,7 +472,7 @@ def _train_sft_pipeline(device: torch.device, fresh: bool = False):
         print(f"[main] embeddings SFT redimensionnes: vocab={required_vocab_size}")
     model.to(device)
     train_loader, val_loader = _build_sft_dataloaders(device)
-    _, grad_accum_steps = _batch_config(device)
+    _, grad_accum_steps = _sft_batch_config(device)
     run_dir = (
         SFT_RUNS_DIR / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
         if fresh else _active_sft_run()
@@ -486,6 +504,7 @@ def _train_sft_pipeline(device: torch.device, fresh: bool = False):
         eval_max_batches=SFT_EVAL_MAX_BATCHES,
         benchmark_path=str(run_dir / "training_benchmark.csv") if run_dir else "artifacts/benchmarks/sft_training_benchmark.csv",
         label_smoothing=SFT_LABEL_SMOOTHING,
+        loss_normalization=SFT_LOSS_NORMALIZATION,
         z_loss_weight=SFT_Z_LOSS_WEIGHT,
         unlikelihood_weight=SFT_UNLIKELIHOOD_WEIGHT,
         unlikelihood_ngram_size=UNLIKELIHOOD_NGRAM_SIZE,
@@ -506,6 +525,9 @@ def _train_sft_pipeline(device: torch.device, fresh: bool = False):
     history = train_sft_model(model, train_loader, config, val_dataloader=val_loader)
     print(f"[main] SFT checkpoint path: {history['checkpoint_path']}")
     print(f"[main] SFT final model path: {history['final_model_path']}")
+
+    if "best_epoch" in history:
+        print(f"[main] SFT retenu: epoch={history['best_epoch']} step={history['best_step']} val_loss={history['best_val_loss']:.4f}")
     return model, history
 
 
@@ -954,8 +976,8 @@ def _run_inference(model: GPT, tokenizer_model, device: torch.device, use_sft_te
         model=model,
         tokenizer=tokenizer_model,
         prompt=INFER_PROMPT,
-        max_new_tokens=INFER_MAX_NEW_TOKENS,
-        temperature=INFER_TEMPERATURE,
+        max_new_tokens=SFT_INFER_MAX_NEW_TOKENS if use_sft_template else INFER_MAX_NEW_TOKENS,
+        temperature=SFT_INFER_TEMPERATURE if use_sft_template else INFER_TEMPERATURE,
         top_k=INFER_TOP_K,
         device=device,
         use_sft_template=use_sft_template
@@ -1032,8 +1054,8 @@ def _interactive_reprompt_loop(model: GPT, tokenizer_model, device: torch.device
                 model=model,
                 tokenizer=tokenizer_model,
                 prompt=user_input,
-                max_new_tokens=INFER_MAX_NEW_TOKENS,
-                temperature=INFER_TEMPERATURE,
+                max_new_tokens=SFT_INFER_MAX_NEW_TOKENS if use_sft_template else INFER_MAX_NEW_TOKENS,
+                temperature=SFT_INFER_TEMPERATURE if use_sft_template else INFER_TEMPERATURE,
                 top_k=INFER_TOP_K,
                 device=device,
                 use_sft_template=use_sft_template
@@ -1078,7 +1100,8 @@ def _inference_action(device: torch.device, sft: bool):
     if model is None:
         return
 
-    _run_inference(model, tokenizer_model, device, use_sft_template=sft)
+    if not (sft and ENABLE_INTERACTIVE_REPROMPT):
+        _run_inference(model, tokenizer_model, device, use_sft_template=sft)
     _interactive_reprompt_loop(model, tokenizer_model, device, use_sft_template=sft)
 
 

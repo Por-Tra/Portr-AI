@@ -144,6 +144,34 @@ class GPT(nn.Module):
         )
         self.output_head.weight = self.embedding.token_emb.weight
 
+    def resize_context(self, new_seq_length: int):
+        """ Etend la taille du contexte (position embeddings) en conservant les poids existants.
+
+        Args:
+            new_seq_length (int): Nouvelle longueur maximale des séquences (doit être >= seq_length actuel).
+
+        Raises:
+            ValueError: Si la nouvelle longueur de séquence est inférieure à la longueur actuelle.
+        """
+        if isinstance(new_seq_length, bool) or not isinstance(new_seq_length, int) or new_seq_length < self.seq_length:
+            raise ValueError("Le contexte ne peut qu'etre agrandi avec une taille entiere")
+        if new_seq_length == self.seq_length:
+            return
+
+        
+        old = self.embedding.position_emb
+        #& recopier les poids existants en les répétant si nécessaire pour remplir la nouvelle longueur.
+        index = torch.arange(new_seq_length, device=old.weight.device) % self.seq_length
+        positions = nn.Embedding(new_seq_length, self.embedding_dim, _weight=old.weight.detach()[index].clone())
+        self.embedding.position_emb = positions
+        self.embedding.position_ids = torch.arange(new_seq_length, device=old.weight.device)[None, :]
+        self.embedding.seq_length = self.seq_length = new_seq_length
+
+        for block in self.blocks:
+            attention = block.attention
+            attention.causal_mask = torch.ones(new_seq_length, new_seq_length,
+                device=old.weight.device, dtype=torch.bool).tril()[None, None, :, :]
+
     def _apply_scaled_init(self) -> None:
         """Applique l'init GPT-2 avec scaling sur projections residuelles."""
         #& 1. Marquer les projections résiduelles
@@ -152,7 +180,7 @@ class GPT(nn.Module):
             block.mlp.fc2._is_residual_proj = True
 
         #& 2. Appliquer l'init
-        #&    - projections résiduelles (out_proj, fc2) : std = 0.02 / √(2N)
+        #&    - projections résiduelles (out_proj, fc2) : std = 0.02 / sqrt(2N)
         #&    - autres Linear (qkv_proj, fc1)          : std = 0.02
         #&      (avant : laissées à l'init kaiming par défaut de PyTorch)
         residual_std = 0.02 / math.sqrt(2 * self.num_blocks)
