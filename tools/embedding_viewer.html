@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}} · Portr-AI</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f6f9;color:#23384b;font:14px 'Segoe UI',sans-serif}
+header{padding:25px 34px 20px;background:white;border-bottom:1px solid #e2e8ef}.brand{font-size:11px;font-weight:700;letter-spacing:2px;color:#687d91}.badge{background:#e8f4f1;color:#197866;border-radius:5px;padding:4px 8px;letter-spacing:0;margin-left:10px}h1{font-size:27px;font-weight:650;margin:13px 0 8px}header p{color:#687d91;margin:0;line-height:1.5}.stats{display:flex;gap:30px;margin-top:20px}.stats b{font-size:19px;color:#263f54;margin-right:5px}.stats span{color:#718397;font-size:12px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 325px;gap:18px;padding:22px 28px}.card{background:white;border:1px solid #e2e8ef;border-radius:12px;overflow:hidden}.plot-title{padding:18px 22px 5px;display:flex;align-items:center;justify-content:space-between;gap:10px}.plot-title b{font-size:14px}.sub{font-size:12px;color:#718397}.chart{height:570px;min-width:0}.plot-foot{border-top:1px solid #edf1f5;padding:13px 22px;font-size:12px;color:#73869a;line-height:1.5}aside .section{padding:20px;border-bottom:1px solid #edf1f5}label,h2{font-size:12px;font-weight:650;margin:0 0 10px;display:block}input{width:100%;padding:11px 12px;border:1px solid #d4dee7;border-radius:7px;color:#263f54;background:#fbfcfe;font:inherit}input:focus{outline:2px solid #bdd7ed}button{font:inherit;cursor:pointer}.result,.neighbor{border:0;background:white;text-align:left;width:100%;display:flex;justify-content:space-between;gap:10px;padding:8px 7px;border-radius:5px;color:#38546d}.result:hover,.neighbor:hover{background:#eef5fa}button:focus-visible{outline:2px solid #3178b5}.small{font-size:11px;color:#73869a}#results{max-height:180px;overflow:auto;margin-top:8px}#selected{font-size:23px;font-weight:650;overflow-wrap:anywhere;margin-bottom:8px}#details{font-size:12px;line-height:1.8;color:#73869a}.empty{color:#7d8ea0;font-size:12px;line-height:1.6}.neighbor .name{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.neighbor .score{color:#a66b24;font-variant-numeric:tabular-nums;font-size:12px}.notice{max-width:1100px;margin:0 28px 22px;color:#73869a;font-size:12px;line-height:1.7}details{margin-top:8px}summary{cursor:pointer}.path{word-break:break-all}#live{margin-top:8px}#neighbor-list{max-height:330px;overflow:auto}
+@media(min-width:1500px){.chart{height:660px}}@media(max-width:850px){main{grid-template-columns:1fr;padding:14px}.chart{height:460px}header{padding:20px}.stats{gap:14px;flex-wrap:wrap}aside{display:grid;grid-template-columns:1fr 1fr}aside .section:first-child{grid-column:1/-1}.notice{margin:0 16px 20px}}@media(max-width:500px){aside{display:block}.plot-title{display:block}.plot-title .sub{display:block;margin-top:6px}h1{font-size:23px}}
+</style>
+<style>.chart>div{height:100%}</style>
+</head>
+<body>
+<header>
+ <div class="brand">PORTR-AI / EXPLORATEUR <span class="badge">{{MODEL}}</span></div>
+ <h1>{{TITLE}}</h1>
+ <p>Explore les vecteurs appris et leurs voisins. Clique sur un point ou recherche un token.</p>
+ <div class="stats"><div><b>{{COUNT}}</b><span>points affiches / {{TOTAL}}</span></div><div><b>{{FEATURES}}</b><span>dimensions d'origine</span></div><div><b>{{CONTEXT}}</b><span>tokens de contexte du modele</span></div></div>
+</header>
+<main>
+ <section class="card">
+  <div class="plot-title"><b>Carte des vecteurs</b><span class="sub">{{PROJECTION}}</span></div>
+  <div class="chart">{{CHART}}</div>
+  <div class="plot-foot">{{NORMALIZED}} pour la projection. Survole pour identifier un point ; utilise la molette pour zoomer. Les couleurs indiquent des categories, pas des classes semantiques.</div>
+ </section>
+ <aside class="card">
+  <div class="section"><label for="search">RECHERCHER UN POINT</label><input id="search" placeholder="Un token, une position ou #ID" autocomplete="off"><div id="results"></div><div id="live" class="small" role="status" aria-live="polite">Recherche parmi les points affiches.</div></div>
+  <div class="section"><h2>POINT SELECTIONNE</h2><div id="selected">—</div><div id="details" class="empty">Clique sur la carte pour examiner un vecteur.</div></div>
+  <div class="section"><h2>VOISINS PAR SIMILARITE COSINUS</h2><div id="neighbor-list" class="empty">Les voisins sont calcules dans les {{FEATURES}} dimensions d'origine, parmi tous les vecteurs du modele pour ce mode.</div><p class="small">1 = meme direction · 0 = orthogonal · −1 = oppose.<br>Un vecteur nul n'a pas de similarite cosinus definie.</p></div>
+ </aside>
+</main>
+<div class="notice">Cette carte est une projection avec perte d'information : une proximite visuelle ne garantit pas une proximite dans l'espace original. Les tokens BPE peuvent etre des fragments de mots. En mode contextual, chaque point est une occurrence de token apres le dernier bloc du modele, et non un embedding de phrase ; les voisins se limitent aux textes fournis.
+ <details><summary>Modele source et lecture de la carte</summary><div class="path">{{CHECKPOINT}}</div><div class="path">SHA-256 des poids lus : {{SNAPSHOT}}</div>Cette carte decrit les poids lus a sa creation et ne se met pas a jour pendant un entrainement. Les axes n'ont pas de signification semantique predefinie. Deux cartes calculees separement ne sont pas directement alignees. Aucun entrainement n'est lance par cet outil.</details>
+</div>
+<script id="embedding-data" type="application/json">{{DATA}}</script>
+<script>
+'use strict';
+const data = JSON.parse(document.getElementById('embedding-data').textContent);
+const chart = document.getElementById('embedding-map');
+const displayed = new Map(data.indices.map((id,i)=>[id,i]));
+const get = id => document.getElementById(id);
+function pointText(row){return row.token+(row.text_number?' · texte '+row.text_number+', position '+row.position:'');}
+function overlay(indices, trace){
+ const update={x:[indices.map(i=>data.coordinates[i][0])],y:[indices.map(i=>data.coordinates[i][1])],customdata:[indices]};
+ if(data.dims===3)update.z=[indices.map(i=>data.coordinates[i][2])];
+ Plotly.restyle(chart,update,[trace]);
+}
+function select(i){
+ const row=data.rows[data.indices[i]];
+ get('selected').textContent=row.token;
+ const detail=['ID du vecteur : '+row.id];
+ if(row.token_id!==undefined)detail.push('ID du token : '+row.token_id);
+ if(row.position!==undefined)detail.push('Position : '+row.position);
+ if(row.text_number)detail.push('Texte : '+row.text_number);
+ detail.push('Norme L2 : '+row.norm.toFixed(4));
+ get('details').replaceChildren(...detail.map(text=>{const d=document.createElement('div');d.textContent=text;return d;}));
+ const list=get('neighbor-list');list.replaceChildren();
+ const visible=[];
+ data.neighbors[i].forEach((id,j)=>{
+  const neighbor=data.rows[id], target=displayed.get(id);
+  const b=document.createElement('button');b.type='button';b.className='neighbor';
+  const label=document.createElement('span');label.className='name';label.textContent=pointText(neighbor);
+  const value=document.createElement('span');value.className='score';value.textContent=data.scores[i][j].toFixed(4);
+  b.append(label,value);b.title=pointText(neighbor)+(target===undefined?' (hors echantillon affiche)':'');
+  if(target===undefined){b.disabled=true;b.style.opacity='.6';}else{visible.push(target);b.onclick=()=>select(target);}
+  list.append(b);
+ });
+ if(!data.neighbors[i].length)list.textContent='Aucun voisin : la similarite est indefinie pour ce vecteur.';
+ overlay(visible,data.baseTraces);overlay([i],data.baseTraces+1);
+ get('live').textContent='Selection : '+pointText(row);
+}
+chart.on('plotly_click',event=>{
+ const value=event.points[0].customdata;
+ if(Number.isInteger(value))select(value);
+});
+function search(){
+ const query=get('search').value.trim().toLocaleLowerCase('fr');
+ const results=get('results');results.replaceChildren();
+ if(!query){get('live').textContent='Recherche parmi les points affiches.';return;}
+ let matches=[];
+ data.indices.forEach((id,i)=>{
+  const row=data.rows[id];
+  if(query.startsWith('#')?String(row.id)===query.slice(1):pointText(row).toLocaleLowerCase('fr').includes(query))matches.push(i);
+ });
+ matches.sort((a,b)=>Number(data.rows[data.indices[b]].token.toLocaleLowerCase('fr')===query)-Number(data.rows[data.indices[a]].token.toLocaleLowerCase('fr')===query));
+ matches.slice(0,30).forEach(i=>{
+  const row=data.rows[data.indices[i]],b=document.createElement('button');b.type='button';b.className='result';
+  const name=document.createElement('span');name.textContent=pointText(row);
+  const id=document.createElement('span');id.className='small';id.textContent='#'+row.id;
+  b.append(name,id);b.onclick=()=>select(i);results.append(b);
+ });
+ get('live').textContent=matches.length+' resultat(s)'+(matches.length>30?' · 30 premiers affiches':'');
+}
+get('search').addEventListener('input',search);
+get('search').addEventListener('keydown',event=>{if(event.key==='Enter'){const first=get('results').querySelector('button');if(first)first.click();}});
+</script>
+</body>
+</html>

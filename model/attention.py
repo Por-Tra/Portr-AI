@@ -1,10 +1,11 @@
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -128,10 +129,16 @@ class Attention(nn.Module):
             #! NOTE : un prefill par morceaux (past_kv non-None ET T > 1)
             #! nécessiterait un attn_mask explicite ; generate() ne le fait pas.
             is_causal = not is_decoding
+            attn_mask = None
+
+            if is_decoding and T > 1:
+                #& Décode par morceaux (T>1) : sdpa ne peut pas générer le masque correct
+                query_positions = torch.arange(T_full - T, T_full, device=x.device)[:, None]
+                attn_mask = torch.arange(T_full, device=x.device)[None, :] <= query_positions
 
             attn_out = F.scaled_dot_product_attention(
                 Q, K, V,
-                attn_mask=None,
+                attn_mask=attn_mask,
                 dropout_p=self.dropout_p if self.training else 0.0,
                 is_causal=is_causal
             )

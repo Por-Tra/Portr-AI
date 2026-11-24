@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -21,7 +22,7 @@ description du script:
         
         2. Embedding (Token + Position + Dropout) [batch, seq, embedding_dim]
         
-        3. N x TransformerBlock (Attention + MLP + Résiduel) [batch, seq, embedding_dim]
+        3. N * TransformerBlock (Attention + MLP + Résiduel) [batch, seq, embedding_dim]
         
         4. Final LayerNorm [batch, seq, embedding_dim]
         
@@ -106,6 +107,71 @@ class GPT(nn.Module):
         #& l'explosion du signal à l'init sur des réseaux profonds.
         self._apply_scaled_init()
 
+    def resize_token_embeddings(self, new_vocab_size):
+        """Agrandit l'embedding de tokens en conservant les poids existants.
+
+        Les nouvelles lignes sont initialisees comme l'embedding GPT-2, puis
+        la tete de sortie est recreee et liee au nouvel embedding.
+
+        Args:
+            new_vocab_size (int): Nouvelle taille du vocabulaire (doit être >= vocab_size actuel).
+
+        Raises:
+            ValueError: Si la nouvelle taille du vocabulaire est inférieure à la taille actuelle.
+        """
+        if new_vocab_size < self.vocab_size:
+            raise ValueError(f"Le nouveau vocabulaire ({new_vocab_size}) ne peut pas etre plus petit que l'ancien ({self.vocab_size}).")
+        
+        if new_vocab_size == self.vocab_size:
+            return
+
+        old_token_emb = self.embedding.token_emb
+        new_token_emb = nn.Embedding(new_vocab_size, self.embedding_dim, device=old_token_emb.weight.device, dtype=old_token_emb.weight.dtype)
+        nn.init.normal_(new_token_emb.weight, mean=0.0, std=0.02)
+        with torch.no_grad():
+            new_token_emb.weight[: self.vocab_size].copy_(old_token_emb.weight)
+
+        self.embedding.token_emb = new_token_emb
+        self.embedding.vocab_size = new_vocab_size
+        self.vocab_size = new_vocab_size
+
+        self.output_head = nn.Linear(
+            self.embedding_dim,
+            new_vocab_size,
+            bias=False,
+            device=new_token_emb.weight.device,
+            dtype=new_token_emb.weight.dtype
+        )
+        self.output_head.weight = self.embedding.token_emb.weight
+
+    def resize_context(self, new_seq_length: int):
+        """ Etend la taille du contexte (position embeddings) en conservant les poids existants.
+
+        Args:
+            new_seq_length (int): Nouvelle longueur maximale des séquences (doit être >= seq_length actuel).
+
+        Raises:
+            ValueError: Si la nouvelle longueur de séquence est inférieure à la longueur actuelle.
+        """
+        if isinstance(new_seq_length, bool) or not isinstance(new_seq_length, int) or new_seq_length < self.seq_length:
+            raise ValueError("Le contexte ne peut qu'etre agrandi avec une taille entiere")
+        if new_seq_length == self.seq_length:
+            return
+
+        
+        old = self.embedding.position_emb
+        #& recopier les poids existants en les répétant si nécessaire pour remplir la nouvelle longueur.
+        index = torch.arange(new_seq_length, device=old.weight.device) % self.seq_length
+        positions = nn.Embedding(new_seq_length, self.embedding_dim, _weight=old.weight.detach()[index].clone())
+        self.embedding.position_emb = positions
+        self.embedding.position_ids = torch.arange(new_seq_length, device=old.weight.device)[None, :]
+        self.embedding.seq_length = self.seq_length = new_seq_length
+
+        for block in self.blocks:
+            attention = block.attention
+            attention.causal_mask = torch.ones(new_seq_length, new_seq_length,
+                device=old.weight.device, dtype=torch.bool).tril()[None, None, :, :]
+
     def _apply_scaled_init(self) -> None:
         """Applique l'init GPT-2 avec scaling sur projections residuelles."""
         #& 1. Marquer les projections résiduelles
@@ -114,7 +180,7 @@ class GPT(nn.Module):
             block.mlp.fc2._is_residual_proj = True
 
         #& 2. Appliquer l'init
-        #&    - projections résiduelles (out_proj, fc2) : std = 0.02 / √(2N)
+        #&    - projections résiduelles (out_proj, fc2) : std = 0.02 / sqrt(2N)
         #&    - autres Linear (qkv_proj, fc1)          : std = 0.02
         #&      (avant : laissées à l'init kaiming par défaut de PyTorch)
         residual_std = 0.02 / math.sqrt(2 * self.num_blocks)
@@ -152,8 +218,11 @@ class GPT(nn.Module):
     #*                      Génération avec KV Cache
     #* ------------------------------------------------------------------
 
-    def _prefill(self, input_tokens: torch.Tensor):
+    def _prefill(self, input_tokens):
         """Encode une séquence complète et construit le KV cache.
+
+        Args:
+            input_tokens (torch.Tensor): [batch_size, seq_len] - indices des tokens d'entrée
 
         Returns:
             Tuple[List[Tuple[torch.Tensor, torch.Tensor]], int, torch.Tensor] : (past_kvs, position suivante, logits du dernier token [B, vocab])
@@ -166,7 +235,7 @@ class GPT(nn.Module):
         x = self.final_ln(x)
         return past_kvs, input_tokens.shape[1], self.output_head(x[:, -1, :])
 
-    def generate(self, initial_tokens: torch.Tensor, max_length: int, temperature: float = 1.0, top_k: Optional[int] = None):
+    def generate(self, initial_tokens, max_length, temperature = 1.0, top_k = None, eos_token_id = None):
         """
         Génère des tokens avec KV Cache.
 
@@ -183,48 +252,69 @@ class GPT(nn.Module):
             max_length    : Longueur totale visée (prompt inclus)
             temperature   : Contrôle la diversité (< 1.0 = plus conservateur)
             top_k         : Si spécifié, sample parmi les top-k tokens
+            eos_token_id  : Arrête la génération quand ce token est produit.
+
+        Raises:
+            ValueError: Si initial_tokens n'est pas [B, T] non vide.
+            ValueError: Si max_length n'est pas un entier positif.
+            ValueError: Si temperature n'est pas finie ou < 0.
+            ValueError: Si top_k n'est pas un entier positif ou None.
+            ValueError: Si eos_token_id n'est pas un entier entre 0 et vocab_size-1.
 
         Returns:
             torch.Tensor: tokens générés de forme [batch_size, max(max_length, prompt_len)]
         """
+        if initial_tokens.ndim != 2 or initial_tokens.shape[0] == 0 or initial_tokens.shape[1] == 0:
+            raise ValueError("initial_tokens doit etre [B,T] non vide")
+        if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 0:
+            raise ValueError("max_length doit etre un entier >= 0")
+        if not math.isfinite(temperature) or temperature < 0:
+            raise ValueError("temperature doit etre finie et >= 0 (0 = glouton)")
+        if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0):
+            raise ValueError("top_k doit etre un entier positif ou None")
+        if eos_token_id is not None and not 0 <= eos_token_id < self.vocab_size:
+            raise ValueError("eos_token_id hors vocabulaire")
+        tokens = initial_tokens.clone()
+        if tokens.shape[1] >= max_length:
+            return tokens
+        
         was_training = self.training
         self.eval()
-        tokens = initial_tokens.clone()
+        try:
+            with torch.no_grad():
+                past_kvs, pos, next_logits = self._prefill(tokens[:, -self.seq_length:])
+                finished = torch.zeros(tokens.shape[0], dtype=torch.bool, device=tokens.device)
+                while tokens.shape[1] < max_length:
+                    next_token = self._sample(next_logits, temperature, top_k)
 
-        with torch.no_grad():
-            #* Prefill (prompt tronqué à gauche si trop long)
-            past_kvs, pos, next_logits = self._prefill(tokens[:, -self.seq_length:])
+                    if eos_token_id is not None:
+                        next_token = torch.where(finished[:, None], eos_token_id, next_token)
+                        finished |= next_token[:, 0] == eos_token_id
 
-            #* Decode loop (T=1 à chaque step)
-            while tokens.shape[1] < max_length:
-                next_token = self._sample(next_logits, temperature, top_k)
-                tokens = torch.cat([tokens, next_token], dim=1)
-                if tokens.shape[1] >= max_length:
-                    break
+                    tokens = torch.cat([tokens, next_token], dim=1)
+                    if eos_token_id is not None and bool(finished.all()):
+                        break
+                    if tokens.shape[1] >= max_length:
+                        break
+                    if pos >= self.seq_length:
+                        keep = max(1, self.seq_length // 2)
+                        past_kvs, pos, next_logits = self._prefill(tokens[:, -keep:])
+                        continue
+                    x = self.embedding(next_token, pos_offset=pos)
+                    pos += 1
+                    new_kvs = []
+                    for block, past_kv in zip(self.blocks, past_kvs):
+                        x, kv = block(x, past_kv=past_kv, use_cache=True)
+                        new_kvs.append(kv)
+                    past_kvs = new_kvs
+                    next_logits = self.output_head(self.final_ln(x)[:, -1, :])
+            return tokens
+        finally:
+            self.train(was_training)
 
-                if pos >= self.seq_length:
-                    #& Fenêtre pleine : re-prefill sur les derniers tokens
-                    keep = max(1, self.seq_length // 2)
-                    past_kvs, pos, next_logits = self._prefill(tokens[:, -keep:])
-                    continue
-
-                x = self.embedding(next_token, pos_offset=pos)  # [B, 1, D]
-                pos += 1
-
-                new_kvs = []
-                for block, past_kv in zip(self.blocks, past_kvs):
-                    x, kv = block(x, past_kv=past_kv, use_cache=True)
-                    new_kvs.append(kv)  # type: ignore[arg-type]
-                past_kvs = new_kvs
-
-                x = self.final_ln(x)
-                next_logits = self.output_head(x[:, -1, :])
-
-        self.train(was_training)
-        return tokens
 
     @staticmethod
-    def _sample( logits: torch.Tensor, temperature: float, top_k: Optional[int]):
+    def _sample( logits, temperature, top_k):
         """
         Applique température + top-k puis sample un token.
 
@@ -233,10 +323,24 @@ class GPT(nn.Module):
             temperature: facteur de mise à l'échelle
             top_k      : nombre de candidats conservés
 
+        Raises:
+            ValueError: Si temperature n'est pas finie ou < 0.
+            ValueError: Si top_k n'est pas un entier positif ou None.
+            ValueError: Si eos_token_id n'est pas un entier entre 0 et vocab_size-1.
+            ValueError: Si les logits contiennent des valeurs non finies (NaN ou Inf).
+
         Returns:
             torch.Tensor: token sample de forme [batch_size, 1]
         """
-        logits = logits / max(temperature, 1e-8)
+        if not math.isfinite(temperature) or temperature < 0:
+            raise ValueError("temperature invalide")
+        if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0):
+            raise ValueError("top_k invalide")
+        if not torch.isfinite(logits).all():
+            raise ValueError("Logits non finis pendant la generation")
+        if temperature == 0:
+            return torch.argmax(logits, dim=-1, keepdim=True)
+        logits = logits / temperature
 
         if top_k is not None:
             k = min(top_k, logits.size(-1))
@@ -247,8 +351,8 @@ class GPT(nn.Module):
 
         probs = torch.softmax(logits, dim=-1)
 
-        if torch.isnan(probs).any() or torch.isinf(probs).any():
-            return torch.argmax(logits, dim=-1, keepdim=True)
+        if not torch.isfinite(probs).all():
+            raise ValueError("Probabilites non finies pendant la generation")
 
         return torch.multinomial(probs, num_samples=1)
 
@@ -268,7 +372,7 @@ class GPTConfig:
         self.num_blocks = kwargs.get("num_blocks", 4)
         self.dropout = kwargs.get("dropout", 0.1)
 
-    def to_dict(self) -> dict:
+    def to_dict(self):
         return {
             "vocab_size": self.vocab_size,
             "seq_length": self.seq_length,

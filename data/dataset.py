@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
 """
-██████╗  ██████╗ ██████╗ ████████╗██████╗        █████╗ ██╗
-██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██╔══██╗      ██╔══██╗██║
-██████╔╝██║   ██║██████╔╝   ██║   ██████╔╝█████╗███████║██║
-██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══██╗╚════╝██╔══██║██║
-██║     ╚██████╔╝██║  ██║   ██║   ██║  ██║      ██║  ██║██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝      ╚═╝  ╚═╝╚═╝
+████████████   ██ ██████              ██                            ████      ██
+██        ██ ████     ████            ███                          ██ ███     ██
+██        ██████        ███ ██████████████████ ████████           ███  ███    ██
+███████████████         ███ ██        ███      ██                ██     ███   ██
+██          ███         ███ ██        ███      ██     █████████ ████████████  ██
+██           █████   █████  ██        ████     ██              ███        ███ ██
+██             █████████    ██         ███████ ██             ███          ██ ██
 
 auteur : @Lucas Contreras Hodapp
 
@@ -42,7 +43,13 @@ from torch.utils.data import Dataset, Sampler
 
 class TextDataset(Dataset):
 
-    def __init__(self, tokens, seq_length: int, stride: int | None = None):
+    def __init__(self, tokens, seq_length, stride = None):
+        
+        if not isinstance(seq_length, int) or isinstance(seq_length, bool) or seq_length <= 0:
+            raise ValueError("seq_length doit etre un entier positif")
+        if stride is not None and (not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0):
+            raise ValueError("stride doit etre un entier positif ou None")
+        
         self.tokens = tokens
         self.seq_length = seq_length
         self.stride = stride or seq_length
@@ -55,6 +62,9 @@ class TextDataset(Dataset):
         return usable // self.stride + 1
 
     def __getitem__(self, idx):
+
+        if idx < 0 or idx >= len(self): raise IndexError(idx)
+        
         start = idx * self.stride
         x = self.tokens[start:start + self.seq_length]
         y = self.tokens[start + 1:start + self.seq_length + 1]
@@ -81,18 +91,33 @@ class ResumableRandomSampler(Sampler[int]):
 
     _CHUNK = 65_536
 
-    def __init__(self, num_samples: int, seed: int = 0, replacement: bool = False):
+    def __init__(self, num_samples, seed = 0, replacement = False):
+        
+        
+        if num_samples <= 0: raise ValueError("num_samples doit etre positif")
+        
         self.num_samples = int(num_samples)
         self.seed = int(seed)
         self.replacement = replacement
         self.epoch = 0
         self.start_index = 0
 
-    def set_epoch(self, epoch: int, start_index: int = 0) -> None:
+    def set_epoch(self, epoch, start_index = 0):
+        """ Configure l'epoch et l'index de départ pour la reprise.
+
+        Args:
+            epoch (int): Numéro d'epoch
+            start_index (int, optional): Index de départ pour la reprise. Defaults to 0.
+
+        Raises:
+            ValueError: Si epoch < 0 ou start_index hors limites.
+        """
+        if epoch < 0 or not 0 <= start_index <= self.num_samples: raise ValueError("epoch ou start_index hors limites")
+
         self.epoch = int(epoch)
         self.start_index = int(start_index)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return self.num_samples
 
     def __iter__(self):
