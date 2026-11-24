@@ -114,6 +114,15 @@ Wikipedia ZIM or legacy web crawler.
 
 ## Usage
 
+### Run the published model (1.0.1)
+
+Download the standalone **SFT** or **base** archive from the
+[1.0.1 release](https://github.com/Por-Tra/Portr-AI/releases/tag/v1.0.1).
+Extract it, then run `python -m pip install -r requirements-inference.txt`
+and `python run_model.py --prompt "Bonjour !"` (add `--model base` for the base archive).
+No repository clone, datasets or training required. See the
+[minimal download and launch guide](docs/QUICKSTART.md).
+
 ### 1. Data preparation
 
 The complete data pipeline is in `prepare_data.py`. It first checks the available
@@ -427,6 +436,15 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ---
 
 ## Utilisation
+
+### Lancer le modèle publié (1.0.1)
+
+Télécharger l'archive autonome **SFT** ou **base** de la
+[release 1.0.1](https://github.com/Por-Tra/Portr-AI/releases/tag/v1.0.1).
+Après extraction : `python -m pip install -r requirements-inference.txt`, puis
+`python run_model.py --prompt "Bonjour !"` (ajouter `--model base` pour la base).
+Aucun clonage, dataset ou entraînement nécessaire. Voir le
+[guide minimal de téléchargement et lancement](docs/QUICKSTART.md).
 
 ### 1. Préparation des données
 
